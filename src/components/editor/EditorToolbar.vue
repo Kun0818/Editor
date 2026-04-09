@@ -25,8 +25,6 @@ const tools = [
   { key: 'tableAddCol', label: 'Add Col', title: 'Add a column to the right' },
   { key: 'tableDeleteRow', label: 'Del Row', title: 'Delete current table row' },
   { key: 'tableDeleteCol', label: 'Del Col', title: 'Delete current table column' },
-  { key: 'code', label: 'Code', title: 'Inline code / code block' },
-  { key: 'date', label: 'Date', title: 'Insert current date and time' },
 ]
 
 const utilityTools = [

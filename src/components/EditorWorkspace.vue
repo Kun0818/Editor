@@ -90,14 +90,6 @@ const extractText = (rawHtml) => {
   return (temp.innerText || '').replaceAll('\u00A0', ' ')
 }
 
-const escapeHtml = (value) =>
-  value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;')
-
 const isSafeHref = (href) =>
   /^(https?:|mailto:|tel:|\/|#)/i.test(href.trim())
 
@@ -794,9 +786,6 @@ const updateActiveTools = () => {
   if (findAncestorByTag(node, ['BLOCKQUOTE'])) {
     active.add('quote')
   }
-  if (findAncestorByTag(node, ['PRE', 'CODE'])) {
-    active.add('code')
-  }
   if (findAncestorByTag(node, ['TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD'])) {
     active.add('table')
     active.add('tableMerge')
@@ -1031,22 +1020,6 @@ const insertHtmlAtSelection = (html) => {
   syncModelFromEditor()
 }
 
-const wrapSelectionAsCode = () => {
-  const selection = window.getSelection()
-  const selectedText = selection?.rangeCount ? selection.getRangeAt(0).toString() : ''
-  if (!selectedText) {
-    insertHtmlAtSelection('<code>code</code>')
-    return
-  }
-
-  const escaped = escapeHtml(selectedText)
-  if (selectedText.includes('\n')) {
-    insertHtmlAtSelection(`<pre><code>${escaped}</code></pre>`)
-    return
-  }
-  insertHtmlAtSelection(`<code>${escaped}</code>`)
-}
-
 const insertDefaultTable = (rows = 3, cols = 3) => {
   const headerCells = Array.from(
     { length: cols },
@@ -1135,14 +1108,6 @@ const handleAction = (action, contextOverride = null) => {
       break
     case 'tableDeleteCol':
       deleteCurrentTableColumn(contextOverride)
-      break
-    case 'code':
-      wrapSelectionAsCode()
-      break
-    case 'date':
-      insertHtmlAtSelection(
-        `<time datetime="${new Date().toISOString()}">${new Date().toLocaleString()}</time>`,
-      )
       break
     case 'clear':
       contentHtml.value = ''
