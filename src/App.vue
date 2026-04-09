@@ -1,7 +1,7 @@
 <script setup>
-import HelloWorld from './components/HelloWorld.vue'
+import EditorWorkspace from './components/EditorWorkspace.vue'
 </script>
 
 <template>
-  <HelloWorld />
+  <EditorWorkspace />
 </template>
