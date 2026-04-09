@@ -19,6 +19,8 @@ const tools = [
   { key: 'quote', label: 'Quote', title: 'Block quote' },
   { key: 'list', label: 'List', title: 'Bullet list' },
   { key: 'table', label: 'Table', title: 'Insert a 3x3 table' },
+  { key: 'tableMerge', label: 'Merge', title: 'Merge selected table cells' },
+  { key: 'tableUnmerge', label: 'Unmerge', title: 'Split current merged cell' },
   { key: 'tableAddRow', label: 'Add Row', title: 'Add a row below current row' },
   { key: 'tableAddCol', label: 'Add Col', title: 'Add a column to the right' },
   { key: 'tableDeleteRow', label: 'Del Row', title: 'Delete current table row' },

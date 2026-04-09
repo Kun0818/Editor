@@ -317,6 +317,132 @@ const getCurrentTableContext = () => {
   return { cell, row, table }
 }
 
+const getClosestTableCell = (node) => {
+  if (!node) {
+    return null
+  }
+
+  const element =
+    node.nodeType === Node.TEXT_NODE ? node.parentElement : node
+  if (!(element instanceof Element)) {
+    return null
+  }
+
+  const cell = element.closest('td, th')
+  if (!cell || !editor.value?.contains(cell)) {
+    return null
+  }
+  return cell
+}
+
+const getSelectedTableRange = () => {
+  const selection = window.getSelection()
+  if (!selection || !selection.rangeCount) {
+    return null
+  }
+
+  const anchorCell = getClosestTableCell(selection.anchorNode)
+  const focusCell = getClosestTableCell(selection.focusNode)
+  if (!anchorCell || !focusCell) {
+    return null
+  }
+
+  const anchorTable = anchorCell.closest('table')
+  const focusTable = focusCell.closest('table')
+  if (!anchorTable || anchorTable !== focusTable) {
+    return null
+  }
+
+  const table = anchorTable
+  const rows = Array.from(table.querySelectorAll('tr'))
+  const anchorRow = anchorCell.closest('tr')
+  const focusRow = focusCell.closest('tr')
+  if (!anchorRow || !focusRow) {
+    return null
+  }
+
+  const anchorRowIndex = rows.indexOf(anchorRow)
+  const focusRowIndex = rows.indexOf(focusRow)
+  const anchorColIndex = Array.from(anchorRow.children).indexOf(anchorCell)
+  const focusColIndex = Array.from(focusRow.children).indexOf(focusCell)
+  if (
+    anchorRowIndex < 0 ||
+    focusRowIndex < 0 ||
+    anchorColIndex < 0 ||
+    focusColIndex < 0
+  ) {
+    return null
+  }
+
+  const rowStart = Math.min(anchorRowIndex, focusRowIndex)
+  const rowEnd = Math.max(anchorRowIndex, focusRowIndex)
+  const colStart = Math.min(anchorColIndex, focusColIndex)
+  const colEnd = Math.max(anchorColIndex, focusColIndex)
+
+  const cells = []
+  for (let rowIndex = rowStart; rowIndex <= rowEnd; rowIndex += 1) {
+    const row = rows[rowIndex]
+    const rowCells = Array.from(row.children)
+    for (let colIndex = colStart; colIndex <= colEnd; colIndex += 1) {
+      const cell = rowCells[colIndex]
+      if (!cell) {
+        return null
+      }
+      cells.push(cell)
+    }
+  }
+
+  return {
+    table,
+    rows,
+    cells,
+    rowStart,
+    rowEnd,
+    colStart,
+    colEnd,
+    rowCount: rowEnd - rowStart + 1,
+    colCount: colEnd - colStart + 1,
+  }
+}
+
+const buildTableLayout = (table) => {
+  const rows = Array.from(table.querySelectorAll('tr'))
+  const grid = rows.map(() => [])
+  const rowEntries = rows.map(() => [])
+
+  for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
+    const row = rows[rowIndex]
+    const cells = Array.from(row.children)
+    let colIndex = 0
+
+    for (const cell of cells) {
+      while (grid[rowIndex][colIndex]) {
+        colIndex += 1
+      }
+
+      const rowSpan = Math.max(1, Number.parseInt(cell.getAttribute('rowspan') || '1', 10))
+      const colSpan = Math.max(1, Number.parseInt(cell.getAttribute('colspan') || '1', 10))
+
+      rowEntries[rowIndex].push({
+        cell,
+        startCol: colIndex,
+        rowSpan,
+        colSpan,
+      })
+
+      for (let r = rowIndex; r < Math.min(rows.length, rowIndex + rowSpan); r += 1) {
+        for (let c = colIndex; c < colIndex + colSpan; c += 1) {
+          grid[r][c] = cell
+        }
+      }
+
+      colIndex += colSpan
+    }
+  }
+
+  return { rows, grid, rowEntries }
+}
+
 const setCaretToElementStart = (element) => {
   const selection = window.getSelection()
   if (!selection) {
@@ -335,6 +461,124 @@ const removeTableWithFallbackParagraph = (table) => {
   paragraph.innerHTML = '<br>'
   table.replaceWith(paragraph)
   setCaretToElementStart(paragraph)
+}
+
+const mergeSelectedTableCells = () => {
+  const selection = getSelectedTableRange()
+  if (!selection) {
+    return
+  }
+
+  if (selection.rowCount === 1 && selection.colCount === 1) {
+    return
+  }
+
+  const topLeftRow = selection.rows[selection.rowStart]
+  const topLeftCell = Array.from(topLeftRow.children)[selection.colStart]
+  if (!topLeftCell) {
+    return
+  }
+
+  const existingHtml = topLeftCell.innerHTML.trim()
+  const mergedHtml = selection.cells
+    .filter((cell) => cell !== topLeftCell)
+    .map((cell) => cell.innerHTML.trim())
+    .filter(Boolean)
+
+  if (mergedHtml.length) {
+    const parts = []
+    if (existingHtml && existingHtml !== '<br>') {
+      parts.push(existingHtml)
+    }
+    parts.push(...mergedHtml)
+    topLeftCell.innerHTML = parts.join('<br>')
+  }
+
+  if (selection.rowCount > 1) {
+    topLeftCell.setAttribute('rowspan', String(selection.rowCount))
+  } else {
+    topLeftCell.removeAttribute('rowspan')
+  }
+
+  if (selection.colCount > 1) {
+    topLeftCell.setAttribute('colspan', String(selection.colCount))
+  } else {
+    topLeftCell.removeAttribute('colspan')
+  }
+
+  for (let index = selection.cells.length - 1; index >= 0; index -= 1) {
+    const cell = selection.cells[index]
+    if (cell !== topLeftCell) {
+      cell.remove()
+    }
+  }
+
+  setCaretToElementStart(topLeftCell)
+  syncModelFromEditor()
+}
+
+const unmergeCurrentTableCell = () => {
+  const context = getCurrentTableContext()
+  if (!context) {
+    return
+  }
+
+  const { cell, table } = context
+  const layout = buildTableLayout(table)
+
+  let baseRowIndex = -1
+  let cellEntry = null
+  for (let i = 0; i < layout.rowEntries.length; i += 1) {
+    const entry = layout.rowEntries[i].find((item) => item.cell === cell)
+    if (entry) {
+      baseRowIndex = i
+      cellEntry = entry
+      break
+    }
+  }
+
+  if (!cellEntry || baseRowIndex < 0) {
+    return
+  }
+
+  const rowSpan = cellEntry.rowSpan
+  const colSpan = cellEntry.colSpan
+  if (rowSpan === 1 && colSpan === 1) {
+    return
+  }
+
+  const baseCol = cellEntry.startCol
+  const isHeader = cell.tagName === 'TH'
+
+  cell.removeAttribute('rowspan')
+  cell.removeAttribute('colspan')
+
+  const createCell = () => {
+    const nextCell = document.createElement(isHeader ? 'th' : 'td')
+    nextCell.innerHTML = '<br>'
+    return nextCell
+  }
+
+  for (let rowIndex = baseRowIndex; rowIndex < Math.min(layout.rows.length, baseRowIndex + rowSpan); rowIndex += 1) {
+    const row = layout.rows[rowIndex]
+    const entries = layout.rowEntries[rowIndex]
+    const afterCol = baseCol + colSpan
+    const referenceEntry = entries.find((entry) => entry.startCol >= afterCol)
+    const referenceCell = referenceEntry?.cell || null
+    const toInsert = rowIndex === baseRowIndex ? colSpan - 1 : colSpan
+
+    for (let count = 0; count < toInsert; count += 1) {
+      const newCell = createCell()
+      if (referenceCell) {
+        row.insertBefore(newCell, referenceCell)
+      } else {
+        row.appendChild(newCell)
+      }
+    }
+  }
+
+  setCaretToElementStart(cell)
+  syncModelFromEditor()
 }
 
 const deleteCurrentTableRow = () => {
@@ -536,10 +780,20 @@ const updateActiveTools = () => {
   }
   if (findAncestorByTag(node, ['TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD'])) {
     active.add('table')
+    active.add('tableMerge')
     active.add('tableAddRow')
     active.add('tableAddCol')
     active.add('tableDeleteRow')
     active.add('tableDeleteCol')
+
+    const context = getCurrentTableContext()
+    if (context) {
+      const rowSpan = Math.max(1, Number.parseInt(context.cell.getAttribute('rowspan') || '1', 10))
+      const colSpan = Math.max(1, Number.parseInt(context.cell.getAttribute('colspan') || '1', 10))
+      if (rowSpan > 1 || colSpan > 1) {
+        active.add('tableUnmerge')
+      }
+    }
   }
 
   activeToolKeys.value = Array.from(active)
@@ -785,6 +1039,12 @@ const handleAction = (action) => {
       break
     case 'table':
       insertDefaultTable(3, 3)
+      break
+    case 'tableMerge':
+      mergeSelectedTableCells()
+      break
+    case 'tableUnmerge':
+      unmergeCurrentTableCell()
       break
     case 'tableAddRow':
       addCurrentTableRow()
