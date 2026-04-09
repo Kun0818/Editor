@@ -286,6 +286,218 @@ const findAncestorByTag = (node, tagNames) => {
   return null
 }
 
+const getCurrentTableContext = () => {
+  const selection = window.getSelection()
+  if (!selection || !selection.rangeCount) {
+    return null
+  }
+
+  const node = selection.anchorNode
+  if (!isNodeInEditor(node)) {
+    return null
+  }
+
+  const baseElement =
+    node?.nodeType === Node.TEXT_NODE ? node.parentElement : node
+  if (!(baseElement instanceof Element)) {
+    return null
+  }
+
+  const cell = baseElement.closest('td, th')
+  if (!cell || !editor.value?.contains(cell)) {
+    return null
+  }
+
+  const row = cell.closest('tr')
+  const table = cell.closest('table')
+  if (!row || !table) {
+    return null
+  }
+
+  return { cell, row, table }
+}
+
+const setCaretToElementStart = (element) => {
+  const selection = window.getSelection()
+  if (!selection) {
+    return
+  }
+
+  const range = document.createRange()
+  range.selectNodeContents(element)
+  range.collapse(true)
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
+
+const removeTableWithFallbackParagraph = (table) => {
+  const paragraph = document.createElement('p')
+  paragraph.innerHTML = '<br>'
+  table.replaceWith(paragraph)
+  setCaretToElementStart(paragraph)
+}
+
+const deleteCurrentTableRow = () => {
+  const context = getCurrentTableContext()
+  if (!context) {
+    return
+  }
+
+  const { cell, row, table } = context
+  const allRows = Array.from(table.querySelectorAll('tr'))
+  if (!allRows.length) {
+    removeTableWithFallbackParagraph(table)
+    syncModelFromEditor()
+    return
+  }
+
+  if (allRows.length === 1) {
+    removeTableWithFallbackParagraph(table)
+    syncModelFromEditor()
+    return
+  }
+
+  const rowIndex = allRows.indexOf(row)
+  const cellIndex = Math.max(0, Array.from(row.children).indexOf(cell))
+  const nextRow = allRows[rowIndex + 1] || allRows[rowIndex - 1]
+
+  row.remove()
+
+  if (!table.isConnected || !table.querySelector('tr')) {
+    removeTableWithFallbackParagraph(table)
+    syncModelFromEditor()
+    return
+  }
+
+  if (nextRow && nextRow.isConnected) {
+    const nextCells = Array.from(nextRow.children)
+    const targetCell = nextCells[Math.min(cellIndex, Math.max(0, nextCells.length - 1))]
+    if (targetCell) {
+      setCaretToElementStart(targetCell)
+    }
+  }
+
+  syncModelFromEditor()
+}
+
+const addCurrentTableRow = () => {
+  const context = getCurrentTableContext()
+  if (!context) {
+    return
+  }
+
+  const { row } = context
+  const cells = Array.from(row.children)
+  if (!cells.length) {
+    return
+  }
+
+  const newRow = document.createElement('tr')
+  for (const cell of cells) {
+    const tag = cell.tagName === 'TH' ? 'th' : 'td'
+    const newCell = document.createElement(tag)
+    newCell.textContent = tag === 'th' ? 'Header' : 'Cell'
+    newRow.appendChild(newCell)
+  }
+
+  row.insertAdjacentElement('afterend', newRow)
+  const firstCell = newRow.children[0]
+  if (firstCell) {
+    setCaretToElementStart(firstCell)
+  }
+  syncModelFromEditor()
+}
+
+const addCurrentTableColumn = () => {
+  const context = getCurrentTableContext()
+  if (!context) {
+    return
+  }
+
+  const { cell, row, table } = context
+  const rowCells = Array.from(row.children)
+  const targetIndex = Math.max(0, rowCells.indexOf(cell)) + 1
+
+  const allRows = Array.from(table.querySelectorAll('tr'))
+  for (const currentRow of allRows) {
+    const currentCells = Array.from(currentRow.children)
+    const baseCell = currentCells[Math.min(targetIndex - 1, Math.max(0, currentCells.length - 1))]
+    const newTag = baseCell?.tagName === 'TH' ? 'th' : 'td'
+    const newCell = document.createElement(newTag)
+    newCell.textContent = newTag === 'th' ? 'Header' : 'Cell'
+
+    if (targetIndex >= currentCells.length) {
+      currentRow.appendChild(newCell)
+    } else {
+      currentRow.insertBefore(newCell, currentCells[targetIndex])
+    }
+  }
+
+  const latestRows = Array.from(table.querySelectorAll('tr'))
+  const rowIndex = Math.max(0, allRows.indexOf(row))
+  const targetRow = latestRows[Math.min(rowIndex, latestRows.length - 1)]
+  const targetCell = targetRow?.children[targetIndex]
+  if (targetCell) {
+    setCaretToElementStart(targetCell)
+  }
+
+  syncModelFromEditor()
+}
+
+const deleteCurrentTableColumn = () => {
+  const context = getCurrentTableContext()
+  if (!context) {
+    return
+  }
+
+  const { cell, row, table } = context
+  const allRows = Array.from(table.querySelectorAll('tr'))
+  if (!allRows.length) {
+    removeTableWithFallbackParagraph(table)
+    syncModelFromEditor()
+    return
+  }
+
+  const cellIndex = Math.max(0, Array.from(row.children).indexOf(cell))
+  const maxColumns = allRows.reduce(
+    (max, currentRow) => Math.max(max, currentRow.children.length),
+    0,
+  )
+
+  if (maxColumns <= 1) {
+    removeTableWithFallbackParagraph(table)
+    syncModelFromEditor()
+    return
+  }
+
+  for (const currentRow of allRows) {
+    const cells = Array.from(currentRow.children)
+    if (cellIndex < cells.length) {
+      cells[cellIndex].remove()
+    }
+    if (!currentRow.children.length) {
+      currentRow.remove()
+    }
+  }
+
+  const rowsLeft = Array.from(table.querySelectorAll('tr'))
+  if (!rowsLeft.length) {
+    removeTableWithFallbackParagraph(table)
+    syncModelFromEditor()
+    return
+  }
+
+  const rowIndex = Math.max(0, allRows.indexOf(row))
+  const targetRow = rowsLeft[Math.min(rowIndex, rowsLeft.length - 1)]
+  const targetCells = Array.from(targetRow.children)
+  const targetCell = targetCells[Math.min(cellIndex, Math.max(0, targetCells.length - 1))]
+  if (targetCell) {
+    setCaretToElementStart(targetCell)
+  }
+
+  syncModelFromEditor()
+}
+
 const updateActiveTools = () => {
   const selection = window.getSelection()
   if (!selection || !selection.rangeCount) {
@@ -324,6 +536,10 @@ const updateActiveTools = () => {
   }
   if (findAncestorByTag(node, ['TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD'])) {
     active.add('table')
+    active.add('tableAddRow')
+    active.add('tableAddCol')
+    active.add('tableDeleteRow')
+    active.add('tableDeleteCol')
   }
 
   activeToolKeys.value = Array.from(active)
@@ -569,6 +785,18 @@ const handleAction = (action) => {
       break
     case 'table':
       insertDefaultTable(3, 3)
+      break
+    case 'tableAddRow':
+      addCurrentTableRow()
+      break
+    case 'tableAddCol':
+      addCurrentTableColumn()
+      break
+    case 'tableDeleteRow':
+      deleteCurrentTableRow()
+      break
+    case 'tableDeleteCol':
+      deleteCurrentTableColumn()
       break
     case 'code':
       wrapSelectionAsCode()

@@ -19,6 +19,10 @@ const tools = [
   { key: 'quote', label: 'Quote', title: 'Block quote' },
   { key: 'list', label: 'List', title: 'Bullet list' },
   { key: 'table', label: 'Table', title: 'Insert a 3x3 table' },
+  { key: 'tableAddRow', label: 'Add Row', title: 'Add a row below current row' },
+  { key: 'tableAddCol', label: 'Add Col', title: 'Add a column to the right' },
+  { key: 'tableDeleteRow', label: 'Del Row', title: 'Delete current table row' },
+  { key: 'tableDeleteCol', label: 'Del Col', title: 'Delete current table column' },
   { key: 'code', label: 'Code', title: 'Inline code / code block' },
   { key: 'date', label: 'Date', title: 'Insert current date and time' },
 ]
