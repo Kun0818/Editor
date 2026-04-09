@@ -71,6 +71,18 @@ const mentionRange = ref(null)
 const mentionPosition = ref({ top: 0, left: 0 })
 const mentionActiveIndex = ref(0)
 const activeToolKeys = ref([])
+const showTableContextMenu = ref(false)
+const tableContextPosition = ref({ top: 0, left: 0 })
+const tableContextCell = ref(null)
+
+const tableContextActions = [
+  { key: 'tableMerge', label: 'Merge' },
+  { key: 'tableUnmerge', label: 'Unmerge' },
+  { key: 'tableAddRow', label: 'Add Row' },
+  { key: 'tableAddCol', label: 'Add Col' },
+  { key: 'tableDeleteRow', label: 'Delete Row' },
+  { key: 'tableDeleteCol', label: 'Delete Col' },
+]
 
 const extractText = (rawHtml) => {
   const temp = document.createElement('div')
@@ -170,6 +182,10 @@ const mentionMenuStyle = computed(() => ({
   top: `${mentionPosition.value.top}px`,
   left: `${mentionPosition.value.left}px`,
 }))
+const tableContextMenuStyle = computed(() => ({
+  top: `${tableContextPosition.value.top}px`,
+  left: `${tableContextPosition.value.left}px`,
+}))
 
 let saveTimer = null
 const saveDraft = () => {
@@ -245,6 +261,11 @@ const closeMentionMenu = () => {
   mentionActiveIndex.value = 0
 }
 
+const closeTableContextMenu = () => {
+  showTableContextMenu.value = false
+  tableContextCell.value = null
+}
+
 const formatVariableToken = (key) => `{{${key}}}`
 
 const isNodeInEditor = (node) => {
@@ -286,24 +307,7 @@ const findAncestorByTag = (node, tagNames) => {
   return null
 }
 
-const getCurrentTableContext = () => {
-  const selection = window.getSelection()
-  if (!selection || !selection.rangeCount) {
-    return null
-  }
-
-  const node = selection.anchorNode
-  if (!isNodeInEditor(node)) {
-    return null
-  }
-
-  const baseElement =
-    node?.nodeType === Node.TEXT_NODE ? node.parentElement : node
-  if (!(baseElement instanceof Element)) {
-    return null
-  }
-
-  const cell = baseElement.closest('td, th')
+const getTableContextFromCell = (cell) => {
   if (!cell || !editor.value?.contains(cell)) {
     return null
   }
@@ -315,6 +319,21 @@ const getCurrentTableContext = () => {
   }
 
   return { cell, row, table }
+}
+
+const getCurrentTableContext = () => {
+  const selection = window.getSelection()
+  if (!selection || !selection.rangeCount) {
+    return null
+  }
+
+  const node = selection.anchorNode
+  if (!isNodeInEditor(node)) {
+    return null
+  }
+
+  const cell = getClosestTableCell(node)
+  return getTableContextFromCell(cell)
 }
 
 const getClosestTableCell = (node) => {
@@ -517,8 +536,8 @@ const mergeSelectedTableCells = () => {
   syncModelFromEditor()
 }
 
-const unmergeCurrentTableCell = () => {
-  const context = getCurrentTableContext()
+const unmergeCurrentTableCell = (contextOverride = null) => {
+  const context = contextOverride || getCurrentTableContext()
   if (!context) {
     return
   }
@@ -581,8 +600,8 @@ const unmergeCurrentTableCell = () => {
   syncModelFromEditor()
 }
 
-const deleteCurrentTableRow = () => {
-  const context = getCurrentTableContext()
+const deleteCurrentTableRow = (contextOverride = null) => {
+  const context = contextOverride || getCurrentTableContext()
   if (!context) {
     return
   }
@@ -624,8 +643,8 @@ const deleteCurrentTableRow = () => {
   syncModelFromEditor()
 }
 
-const addCurrentTableRow = () => {
-  const context = getCurrentTableContext()
+const addCurrentTableRow = (contextOverride = null) => {
+  const context = contextOverride || getCurrentTableContext()
   if (!context) {
     return
   }
@@ -652,8 +671,8 @@ const addCurrentTableRow = () => {
   syncModelFromEditor()
 }
 
-const addCurrentTableColumn = () => {
-  const context = getCurrentTableContext()
+const addCurrentTableColumn = (contextOverride = null) => {
+  const context = contextOverride || getCurrentTableContext()
   if (!context) {
     return
   }
@@ -688,8 +707,8 @@ const addCurrentTableColumn = () => {
   syncModelFromEditor()
 }
 
-const deleteCurrentTableColumn = () => {
-  const context = getCurrentTableContext()
+const deleteCurrentTableColumn = (contextOverride = null) => {
+  const context = contextOverride || getCurrentTableContext()
   if (!context) {
     return
   }
@@ -887,6 +906,10 @@ const onEditorCaretChange = () => {
 
 const onEditorKeydown = (event) => {
   if (!showMentionMenu.value) {
+    if (showTableContextMenu.value && event.key === 'Escape') {
+      event.preventDefault()
+      closeTableContextMenu()
+    }
     return
   }
 
@@ -921,24 +944,79 @@ const onEditorKeydown = (event) => {
 }
 
 const onDocumentPointerDown = (event) => {
-  if (!showMentionMenu.value) {
-    return
-  }
-
   const target = event.target
-  if (editor.value?.contains(target)) {
-    return
+  if (showMentionMenu.value) {
+    if (
+      editor.value?.contains(target) ||
+      (target instanceof Element && target.closest('.mention-menu'))
+    ) {
+      // Keep mention menu open while interacting with editor or mention list.
+    } else {
+      closeMentionMenu()
+    }
   }
 
-  if (target instanceof Element && target.closest('.mention-menu')) {
-    return
+  if (showTableContextMenu.value) {
+    if (target instanceof Element && target.closest('.table-context-menu')) {
+      return
+    }
+    closeTableContextMenu()
   }
-
-  closeMentionMenu()
 }
 
 const onSelectionChange = () => {
   updateActiveTools()
+}
+
+const onEditorContextMenu = (event) => {
+  const context = getTableContextFromCell(getClosestTableCell(event.target))
+  if (!context) {
+    closeTableContextMenu()
+    return
+  }
+
+  event.preventDefault()
+  closeMentionMenu()
+  tableContextCell.value = context.cell
+
+  const maxWidth = 200
+  const maxHeight = 240
+  tableContextPosition.value = {
+    left: Math.max(8, Math.min(event.clientX, window.innerWidth - maxWidth - 8)),
+    top: Math.max(8, Math.min(event.clientY, window.innerHeight - maxHeight - 8)),
+  }
+  showTableContextMenu.value = true
+}
+
+const isTableContextActionDisabled = (action) => {
+  const context = getTableContextFromCell(tableContextCell.value)
+  if (!context) {
+    return true
+  }
+
+  if (action === 'tableUnmerge') {
+    const rowSpan = Math.max(1, Number.parseInt(context.cell.getAttribute('rowspan') || '1', 10))
+    const colSpan = Math.max(1, Number.parseInt(context.cell.getAttribute('colspan') || '1', 10))
+    return rowSpan === 1 && colSpan === 1
+  }
+
+  if (action === 'tableMerge') {
+    const selected = getSelectedTableRange()
+    return !selected || (selected.rowCount === 1 && selected.colCount === 1)
+  }
+
+  return false
+}
+
+const onTableContextAction = (action) => {
+  const context = getTableContextFromCell(tableContextCell.value)
+  if (!context) {
+    closeTableContextMenu()
+    return
+  }
+
+  closeTableContextMenu()
+  handleAction(action, context)
 }
 
 const runCommand = (command, value = null) => {
@@ -1018,7 +1096,7 @@ const headingCommandMap = {
   heading5: 'H5',
 }
 
-const handleAction = (action) => {
+const handleAction = (action, contextOverride = null) => {
   if (headingCommandMap[action]) {
     runCommand('formatBlock', headingCommandMap[action])
     return
@@ -1044,19 +1122,19 @@ const handleAction = (action) => {
       mergeSelectedTableCells()
       break
     case 'tableUnmerge':
-      unmergeCurrentTableCell()
+      unmergeCurrentTableCell(contextOverride)
       break
     case 'tableAddRow':
-      addCurrentTableRow()
+      addCurrentTableRow(contextOverride)
       break
     case 'tableAddCol':
-      addCurrentTableColumn()
+      addCurrentTableColumn(contextOverride)
       break
     case 'tableDeleteRow':
-      deleteCurrentTableRow()
+      deleteCurrentTableRow(contextOverride)
       break
     case 'tableDeleteCol':
-      deleteCurrentTableColumn()
+      deleteCurrentTableColumn(contextOverride)
       break
     case 'code':
       wrapSelectionAsCode()
@@ -1114,6 +1192,7 @@ const handleAction = (action) => {
         @keyup="onEditorCaretChange"
         @mouseup="onEditorCaretChange"
         @keydown="onEditorKeydown"
+        @contextmenu="onEditorContextMenu"
       ></div>
 
       <ul
@@ -1139,6 +1218,31 @@ const handleAction = (action) => {
           >
             <span class="mention-label">{{ item.label }}</span>
             <code class="mention-code">{{ formatVariableToken(item.key) }}</code>
+          </button>
+        </li>
+      </ul>
+
+      <ul
+        v-if="showTableContextMenu"
+        class="table-context-menu"
+        :style="tableContextMenuStyle"
+        role="menu"
+        aria-label="Table quick actions"
+      >
+        <li
+          v-for="item in tableContextActions"
+          :key="item.key"
+          class="table-context-item"
+        >
+          <button
+            type="button"
+            class="table-context-btn"
+            role="menuitem"
+            :disabled="isTableContextActionDisabled(item.key)"
+            @mousedown.prevent
+            @click="onTableContextAction(item.key)"
+          >
+            {{ item.label }}
           </button>
         </li>
       </ul>
@@ -1333,6 +1437,44 @@ const handleAction = (action) => {
   background: #f0fdfa;
   padding: 0.1rem 0.3rem;
   border-radius: 0.3rem;
+}
+
+.table-context-menu {
+  position: fixed;
+  z-index: 45;
+  margin: 0;
+  padding: 0.35rem;
+  list-style: none;
+  width: min(190px, calc(100vw - 16px));
+  border: 1px solid var(--editor-border);
+  border-radius: 0.65rem;
+  background: #ffffff;
+  box-shadow: 0 14px 28px rgba(15, 23, 42, 0.18);
+}
+
+.table-context-item + .table-context-item {
+  margin-top: 0.15rem;
+}
+
+.table-context-btn {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--editor-ink);
+  border-radius: 0.5rem;
+  padding: 0.38rem 0.48rem;
+  font-size: 0.84rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.table-context-btn:hover:not(:disabled) {
+  background: #ecfeff;
+}
+
+.table-context-btn:disabled {
+  color: #9aa8b8;
+  cursor: not-allowed;
 }
 
 .export-header {
