@@ -1296,9 +1296,6 @@ const updateActiveTools = () => {
       active.add(`heading${headingNode.tagName.slice(1)}`)
     }
 
-    if (findAncestorByTag(node, ['BLOCKQUOTE'])) {
-      active.add('quote')
-    }
   }
 
   const inTable =
@@ -1803,9 +1800,6 @@ const handleAction = (action, contextOverride = null) => {
       break
     case 'italic':
       runCommand('italic')
-      break
-    case 'quote':
-      runCommand('formatBlock', 'BLOCKQUOTE')
       break
     case 'list':
       runCommand('insertUnorderedList')
