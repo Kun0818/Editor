@@ -12,6 +12,7 @@ import {
   Image,
   Italic,
   List,
+  ListOrdered,
   Underline,
 } from '@lucide/vue'
 
@@ -42,6 +43,7 @@ const tools = [
   { key: 'italic', label: 'Italic', title: 'Italic text', icon: Italic },
   { key: 'underline', label: 'Underline', title: 'Underline text', icon: Underline },
   { key: 'list', label: 'List', title: 'Bullet list', icon: List },
+  { key: 'orderedList', label: 'Ordered List', title: 'Numbered list', icon: ListOrdered },
   { key: 'image', label: 'Image', title: 'Insert or edit image', icon: Image },
   { key: 'table', label: 'Table', title: 'Insert a 3x3 table', icon: Grid3x3 },
 ]

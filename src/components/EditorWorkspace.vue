@@ -57,8 +57,8 @@ const allowedAttrs = {
   a: new Set(['href', 'title', 'target', 'rel']),
   time: new Set(['datetime']),
   span: new Set(['style']),
-  th: new Set(['colspan', 'rowspan']),
-  td: new Set(['colspan', 'rowspan']),
+  th: new Set(['colspan', 'rowspan', 'style']),
+  td: new Set(['colspan', 'rowspan', 'style']),
   img: new Set(['src', 'alt', 'title', 'width', 'height', 'data-align']),
 }
 
@@ -268,6 +268,11 @@ const extractFontSizeFromStyle = (styleText) => {
   return clampFontSize(parsed)
 }
 
+const normalizeFontSizeStyle = (styleText) => {
+  const fontSize = extractFontSizeFromStyle(styleText)
+  return fontSize ? `font-size: ${fontSize}px;` : ''
+}
+
 const sanitizeHtml = (rawHtml) => {
   const parser = new DOMParser()
   const doc = parser.parseFromString(rawHtml, 'text/html')
@@ -298,9 +303,18 @@ const sanitizeHtml = (rawHtml) => {
     }
 
     if (tag === 'span') {
-      const fontSize = extractFontSizeFromStyle(node.getAttribute('style'))
-      if (fontSize) {
-        node.setAttribute('style', `font-size: ${fontSize}px;`)
+      const style = normalizeFontSizeStyle(node.getAttribute('style'))
+      if (style) {
+        node.setAttribute('style', style)
+      } else {
+        node.removeAttribute('style')
+      }
+    }
+
+    if (tag === 'td' || tag === 'th') {
+      const style = normalizeFontSizeStyle(node.getAttribute('style'))
+      if (style) {
+        node.setAttribute('style', style)
       } else {
         node.removeAttribute('style')
       }
@@ -888,13 +902,34 @@ const clearFontSizeStylesInFragment = (fragment) => {
   }
 }
 
-const setFontSizeAtSelection = (rawValue) => {
-  if (selectedTableCells.value.length && !editingTableCell.value) {
-    return
+const applyFontSizeToTableCells = (cells, parsedSize) => {
+  const targetSize = parsedSize ?? DEFAULT_FONT_SIZE
+  for (const cell of cells) {
+    if (!(cell instanceof HTMLElement)) {
+      continue
+    }
+    if (parsedSize === null) {
+      cell.style.removeProperty('font-size')
+      if (!cell.getAttribute('style')?.trim()) {
+        cell.removeAttribute('style')
+      }
+    } else {
+      cell.setAttribute('style', `font-size: ${targetSize}px;`)
+    }
   }
+}
 
+const setFontSizeAtSelection = (rawValue) => {
   const parsed = parseFontSizeInput(rawValue)
   const targetSize = parsed ?? DEFAULT_FONT_SIZE
+
+  if (selectedTableCells.value.length && !editingTableCell.value) {
+    applyFontSizeToTableCells(selectedTableCells.value, parsed)
+    currentFontSize.value = String(targetSize)
+    syncModelFromEditor()
+    updateActiveTools()
+    return
+  }
 
   focusEditor()
   const selection = window.getSelection()
@@ -1599,6 +1634,9 @@ const updateActiveTools = () => {
     if (queryStateSafe('insertUnorderedList')) {
       active.add('list')
     }
+    if (queryStateSafe('insertOrderedList')) {
+      active.add('orderedList')
+    }
 
     const headingNode = findAncestorByTag(node, ['H1', 'H2', 'H3', 'H4', 'H5'])
     if (headingNode) {
@@ -1631,10 +1669,15 @@ const updateActiveTools = () => {
     }
   }
 
+  const selectedCellSize = selectedCell
+    ? extractFontSizeFromStyle(selectedCell.getAttribute('style'))
+    : null
   const detectedFontSize =
-    node && !selectedImageNode && !selectedCell
-      ? getInlineFontSizeFromNode(node)
-      : ''
+    selectedCellSize
+      ? String(selectedCellSize)
+      : node && !selectedImageNode
+        ? getInlineFontSizeFromNode(node)
+        : ''
   currentFontSize.value = detectedFontSize || String(DEFAULT_FONT_SIZE)
 
   if (!node && !selectedCell && !selectedImageNode && !showImagePanel.value) {
@@ -2127,6 +2170,9 @@ const handleAction = (action, contextOverride = null) => {
       break
     case 'list':
       runCommand('insertUnorderedList')
+      break
+    case 'orderedList':
+      runCommand('insertOrderedList')
       break
     case 'image':
       imageInsertRange.value = getCurrentEditorRange() || imageInsertRange.value
