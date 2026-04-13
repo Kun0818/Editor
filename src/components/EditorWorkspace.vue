@@ -1869,81 +1869,36 @@ const handleAction = (action, contextOverride = null) => {
 
 <template>
   <main class="workspace">
-    <header class="workspace-header">
-      <p class="eyebrow">Editor Components</p>
-      <input
-        v-model="title"
-        class="title-input"
-        type="text"
-        aria-label="Document title"
-        placeholder="Document title"
-      />
-    </header>
-
     <EditorToolbar :active-tools="activeToolKeys" @action="handleAction" />
-    <input
-      ref="imageFileInput"
-      class="image-file-input"
-      type="file"
-      accept="image/*"
-      @change="onImageFileChange"
-    />
+    <input ref="imageFileInput" class="image-file-input" type="file" accept="image/*" @change="onImageFileChange" />
 
     <section v-if="showImagePanel" class="image-panel" aria-label="Image settings">
       <header class="image-panel-header">Image</header>
       <form class="image-form" @submit.prevent="applyImageChanges">
         <label class="image-field">
           <span class="image-label">Image URL</span>
-          <input
-            v-model="imageForm.src"
-            class="image-input"
-            type="url"
-            placeholder="https://example.com/your-image.png"
-          />
+          <input v-model="imageForm.src" class="image-input" type="url"
+            placeholder="https://example.com/your-image.png" />
         </label>
 
         <label class="image-field">
           <span class="image-label">Alt</span>
-          <input
-            v-model="imageForm.alt"
-            class="image-input"
-            type="text"
-            placeholder="Describe this image"
-          />
+          <input v-model="imageForm.alt" class="image-input" type="text" placeholder="Describe this image" />
         </label>
 
         <label class="image-field">
           <span class="image-label">Title</span>
-          <input
-            v-model="imageForm.title"
-            class="image-input"
-            type="text"
-            placeholder="Optional title"
-          />
+          <input v-model="imageForm.title" class="image-input" type="text" placeholder="Optional title" />
         </label>
 
         <div class="image-grid-two">
           <label class="image-field">
             <span class="image-label">Width</span>
-            <input
-              v-model="imageForm.width"
-              class="image-input"
-              type="number"
-              min="1"
-              max="4096"
-              placeholder="auto"
-            />
+            <input v-model="imageForm.width" class="image-input" type="number" min="1" max="4096" placeholder="auto" />
           </label>
           <label class="image-field">
             <span class="image-label">Height</span>
-            <input
-              v-model="imageForm.height"
-              class="image-input"
-              type="number"
-              min="1"
-              max="4096"
-              placeholder="auto"
-            />
+            <input v-model="imageForm.height" class="image-input" type="number" min="1" max="4096" placeholder="auto" />
           </label>
         </div>
 
@@ -1974,70 +1929,29 @@ const handleAction = (action, contextOverride = null) => {
     </section>
 
     <article class="editor-pane" aria-label="Rich text editor">
-      <header class="pane-header">Rich Text Draft</header>
-      <div
-        ref="editor"
-        class="editor-input"
-        contenteditable="true"
-        role="textbox"
-        aria-multiline="true"
-        data-placeholder="Start writing your content..."
-        @mousedown="onEditorMouseDown"
-        @dblclick="onEditorDblClick"
-        @input="onEditorInput"
-        @keyup="onEditorCaretChange"
-        @mouseup="onEditorCaretChange"
-        @keydown="onEditorKeydown"
-        @contextmenu="onEditorContextMenu"
-      ></div>
+      <!-- <header class="pane-header">Rich Text Draft</header> -->
+      <div ref="editor" class="editor-input" contenteditable="true" role="textbox" aria-multiline="true"
+        data-placeholder="Start writing your content..." @mousedown="onEditorMouseDown" @dblclick="onEditorDblClick"
+        @input="onEditorInput" @keyup="onEditorCaretChange" @mouseup="onEditorCaretChange" @keydown="onEditorKeydown"
+        @contextmenu="onEditorContextMenu"></div>
 
-      <ul
-        v-if="showMentionMenu"
-        class="mention-menu"
-        :style="mentionMenuStyle"
-        role="listbox"
-        aria-label="Variable mentions"
-      >
-        <li
-          v-for="(item, index) in filteredMentions"
-          :key="item.key"
-          class="mention-item"
-        >
-          <button
-            type="button"
-            class="mention-btn"
-            :class="{ active: index === mentionActiveIndex }"
-            role="option"
-            :aria-selected="index === mentionActiveIndex"
-            @mousedown.prevent
-            @click="selectMention(item)"
-          >
+      <ul v-if="showMentionMenu" class="mention-menu" :style="mentionMenuStyle" role="listbox"
+        aria-label="Variable mentions">
+        <li v-for="(item, index) in filteredMentions" :key="item.key" class="mention-item">
+          <button type="button" class="mention-btn" :class="{ active: index === mentionActiveIndex }" role="option"
+            :aria-selected="index === mentionActiveIndex" @mousedown.prevent @click="selectMention(item)">
             <span class="mention-label">{{ item.label }}</span>
             <code class="mention-code">{{ formatVariableToken(item.key) }}</code>
           </button>
         </li>
       </ul>
 
-      <ul
-        v-if="showTableContextMenu"
-        class="table-context-menu"
-        :style="tableContextMenuStyle"
-        role="menu"
-        aria-label="Table quick actions"
-      >
-        <li
-          v-for="item in tableContextActions"
-          :key="item.key"
-          class="table-context-item"
-        >
-          <button
-            type="button"
-            class="table-context-btn"
-            role="menuitem"
-            :disabled="isTableContextActionDisabled(item.key)"
-            @mousedown.prevent
-            @click="onTableContextAction(item.key)"
-          >
+      <ul v-if="showTableContextMenu" class="table-context-menu" :style="tableContextMenuStyle" role="menu"
+        aria-label="Table quick actions">
+        <li v-for="item in tableContextActions" :key="item.key" class="table-context-item">
+          <button type="button" class="table-context-btn" role="menuitem"
+            :disabled="isTableContextActionDisabled(item.key)" @mousedown.prevent
+            @click="onTableContextAction(item.key)">
             {{ item.label }}
           </button>
         </li>
@@ -2052,21 +1966,17 @@ const handleAction = (action, contextOverride = null) => {
       <textarea class="export-output" readonly :value="exportedHtml"></textarea>
     </section>
 
-    <EditorStatusBar
-      :words="words"
-      :characters="characters"
-      :lines="lines"
-      :last-saved-label="lastSavedLabel"
-    />
+    <!-- <EditorStatusBar :words="words" :characters="characters" :lines="lines" :last-saved-label="lastSavedLabel" /> -->
   </main>
 </template>
 
 <style scoped>
 .workspace {
-  width: min(1140px, 100%);
+  /* width: min(1140px, 100%);
   margin: 0 auto;
   display: grid;
-  gap: 1rem;
+  gap: 1rem; */
+  /* border-radius: 5rem; */
 }
 
 .workspace-header {
@@ -2102,20 +2012,23 @@ const handleAction = (action, contextOverride = null) => {
 .editor-pane,
 .export-pane {
   position: relative;
-  border: 1px solid var(--editor-border);
-  border-radius: 1rem;
+  /* border: 1px solid var(--editor-border); */
+  border-top: 1px solid var(--editor-border);
+  /* border-radius: 1rem; */
   background: #ffffff;
   overflow: hidden;
+  border-bottom-left-radius: 0.5rem;
+  border-bottom-right-radius: 0.5rem;
 }
 
-.pane-header {
+/* .pane-header {
   padding: 0.8rem 1rem;
   border-bottom: 1px solid var(--editor-border);
   color: var(--editor-muted);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-size: 0.96rem;
-}
+} */
 
 .editor-input {
   min-height: 320px;
@@ -2339,7 +2252,7 @@ const handleAction = (action, contextOverride = null) => {
   box-shadow: 0 12px 30px rgba(15, 23, 42, 0.16);
 }
 
-.mention-item + .mention-item {
+.mention-item+.mention-item {
   margin-top: 0.2rem;
 }
 
@@ -2389,7 +2302,7 @@ const handleAction = (action, contextOverride = null) => {
   box-shadow: 0 14px 28px rgba(15, 23, 42, 0.18);
 }
 
-.table-context-item + .table-context-item {
+.table-context-item+.table-context-item {
   margin-top: 0.15rem;
 }
 
