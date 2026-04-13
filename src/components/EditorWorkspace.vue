@@ -797,21 +797,37 @@ const addCurrentTableRow = (contextOverride = null) => {
     return
   }
 
-  const { row } = context
+  const { row, table } = context
   const cells = Array.from(row.children)
   if (!cells.length) {
     return
   }
 
+  const isHeaderRow = row.parentElement?.tagName === 'THEAD'
   const newRow = document.createElement('tr')
   for (const cell of cells) {
-    const tag = cell.tagName === 'TH' ? 'th' : 'td'
+    const tag = !isHeaderRow && cell.tagName === 'TH' ? 'th' : 'td'
     const newCell = document.createElement(tag)
     newCell.textContent = tag === 'th' ? 'Header' : 'Cell'
     newRow.appendChild(newCell)
   }
 
-  row.insertAdjacentElement('afterend', newRow)
+  if (isHeaderRow) {
+    let tbody = table.querySelector('tbody')
+    if (!tbody) {
+      tbody = document.createElement('tbody')
+      table.appendChild(tbody)
+    }
+    const firstBodyRow = tbody.querySelector('tr')
+    if (firstBodyRow) {
+      tbody.insertBefore(newRow, firstBodyRow)
+    } else {
+      tbody.appendChild(newRow)
+    }
+  } else {
+    row.insertAdjacentElement('afterend', newRow)
+  }
+
   const firstCell = newRow.children[0]
   if (firstCell) {
     tableRangeAnchor.value = firstCell
