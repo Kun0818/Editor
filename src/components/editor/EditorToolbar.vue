@@ -1,5 +1,8 @@
 <script setup>
 import {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
   Bold,
   Download,
   Eraser,
@@ -42,6 +45,9 @@ const tools = [
   { key: 'bold', label: 'Bold', title: 'Bold text', icon: Bold },
   { key: 'italic', label: 'Italic', title: 'Italic text', icon: Italic },
   { key: 'underline', label: 'Underline', title: 'Underline text', icon: Underline },
+  { key: 'alignLeft', label: 'Align Left', title: 'Align left', icon: AlignLeft },
+  { key: 'alignCenter', label: 'Align Center', title: 'Align center', icon: AlignCenter },
+  { key: 'alignRight', label: 'Align Right', title: 'Align right', icon: AlignRight },
   { key: 'list', label: 'List', title: 'Bullet list', icon: List },
   { key: 'orderedList', label: 'Ordered List', title: 'Numbered list', icon: ListOrdered },
   { key: 'image', label: 'Image', title: 'Insert or edit image', icon: Image },
@@ -64,7 +70,7 @@ const utilityTools = [
         <select class="size-select" :value="props.currentFontSize" title="Font size" @mousedown.stop
           @change="emit('font-size-change', $event.target.value)">
           <option v-for="size in props.fontSizeOptions" :key="size" :value="String(size)">
-            {{ size }}px
+            {{ size }}
           </option>
         </select>
       </label>

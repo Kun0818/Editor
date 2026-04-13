@@ -56,7 +56,19 @@ const allowedTags = new Set([
 const allowedAttrs = {
   a: new Set(['href', 'title', 'target', 'rel']),
   time: new Set(['datetime']),
+  p: new Set(['style']),
+  div: new Set(['style']),
+  h1: new Set(['style']),
+  h2: new Set(['style']),
+  h3: new Set(['style']),
+  h4: new Set(['style']),
+  h5: new Set(['style']),
+  h6: new Set(['style']),
+  ul: new Set(['style']),
+  ol: new Set(['style']),
+  blockquote: new Set(['style']),
   span: new Set(['style']),
+  li: new Set(['style']),
   th: new Set(['colspan', 'rowspan', 'style']),
   td: new Set(['colspan', 'rowspan', 'style']),
   img: new Set(['src', 'alt', 'title', 'width', 'height', 'data-align']),
@@ -96,7 +108,23 @@ const imageAlignOptions = ['left', 'center', 'right']
 const FONT_SIZE_MIN = 8
 const FONT_SIZE_MAX = 40
 const DEFAULT_FONT_SIZE = 12
+const DEFAULT_TEXT_ALIGN = 'left'
 const FONT_SIZE_MARKER = '\u200B'
+const TEXT_ALIGN_VALUES = ['left', 'center', 'right']
+const ALIGNABLE_BLOCK_TAGS = new Set([
+  'P',
+  'DIV',
+  'H1',
+  'H2',
+  'H3',
+  'H4',
+  'H5',
+  'H6',
+  'BLOCKQUOTE',
+  'LI',
+  'TD',
+  'TH',
+])
 const fontSizeOptions = Array.from(
   { length: FONT_SIZE_MAX - FONT_SIZE_MIN + 1 },
   (_, index) => FONT_SIZE_MIN + index,
@@ -121,7 +149,7 @@ const tableContextActions = [
 ]
 
 const extractText = (rawHtml) => {
-  const temp = document.createElement('div')
+  const temp = document.createElement('span')
   temp.innerHTML = rawHtml
   return (temp.innerText || '').replaceAll('\u00A0', ' ')
 }
@@ -268,9 +296,44 @@ const extractFontSizeFromStyle = (styleText) => {
   return clampFontSize(parsed)
 }
 
-const normalizeFontSizeStyle = (styleText) => {
-  const fontSize = extractFontSizeFromStyle(styleText)
-  return fontSize ? `font-size: ${fontSize}px;` : ''
+const extractTextAlignFromStyle = (styleText) => {
+  if (!styleText) {
+    return null
+  }
+  const match = String(styleText).match(/text-align\s*:\s*(left|center|right)/i)
+  if (!match) {
+    return null
+  }
+  const align = match[1].toLowerCase()
+  return TEXT_ALIGN_VALUES.includes(align) ? align : null
+}
+
+const normalizeSanitizedStyle = (
+  styleText,
+  {
+    allowFontSize = false,
+    allowTextAlign = false,
+    fallbackTextAlign = null,
+  } = {},
+) => {
+  const parts = []
+  if (allowTextAlign) {
+    const align =
+      extractTextAlignFromStyle(styleText) ||
+      (fallbackTextAlign && TEXT_ALIGN_VALUES.includes(fallbackTextAlign)
+        ? fallbackTextAlign
+        : null)
+    if (align) {
+      parts.push(`text-align: ${align};`)
+    }
+  }
+  if (allowFontSize) {
+    const fontSize = extractFontSizeFromStyle(styleText)
+    if (fontSize) {
+      parts.push(`font-size: ${fontSize}px;`)
+    }
+  }
+  return parts.join(' ')
 }
 
 const sanitizeHtml = (rawHtml) => {
@@ -279,6 +342,10 @@ const sanitizeHtml = (rawHtml) => {
 
   for (const node of Array.from(doc.body.querySelectorAll('*'))) {
     const tag = node.tagName.toLowerCase()
+    const legacyAlignRaw = (node.getAttribute('align') || '').trim().toLowerCase()
+    const legacyAlign = TEXT_ALIGN_VALUES.includes(legacyAlignRaw)
+      ? legacyAlignRaw
+      : null
     if (!allowedTags.has(tag)) {
       node.replaceWith(doc.createTextNode(node.textContent || ''))
       continue
@@ -303,7 +370,22 @@ const sanitizeHtml = (rawHtml) => {
     }
 
     if (tag === 'span') {
-      const style = normalizeFontSizeStyle(node.getAttribute('style'))
+      const style = normalizeSanitizedStyle(node.getAttribute('style'), {
+        allowFontSize: true,
+      })
+      if (style) {
+        node.setAttribute('style', style)
+      } else {
+        node.removeAttribute('style')
+      }
+    }
+
+    if (tag === 'li') {
+      const style = normalizeSanitizedStyle(node.getAttribute('style'), {
+        allowFontSize: true,
+        allowTextAlign: true,
+        fallbackTextAlign: legacyAlign,
+      })
       if (style) {
         node.setAttribute('style', style)
       } else {
@@ -312,7 +394,35 @@ const sanitizeHtml = (rawHtml) => {
     }
 
     if (tag === 'td' || tag === 'th') {
-      const style = normalizeFontSizeStyle(node.getAttribute('style'))
+      const style = normalizeSanitizedStyle(node.getAttribute('style'), {
+        allowFontSize: true,
+        allowTextAlign: true,
+        fallbackTextAlign: legacyAlign,
+      })
+      if (style) {
+        node.setAttribute('style', style)
+      } else {
+        node.removeAttribute('style')
+      }
+    }
+
+    if (
+      tag === 'p' ||
+      tag === 'div' ||
+      tag === 'h1' ||
+      tag === 'h2' ||
+      tag === 'h3' ||
+      tag === 'h4' ||
+      tag === 'h5' ||
+      tag === 'h6' ||
+      tag === 'ul' ||
+      tag === 'ol' ||
+      tag === 'blockquote'
+    ) {
+      const style = normalizeSanitizedStyle(node.getAttribute('style'), {
+        allowTextAlign: true,
+        fallbackTextAlign: legacyAlign,
+      })
       if (style) {
         node.setAttribute('style', style)
       } else {
@@ -815,6 +925,189 @@ const queryStateSafe = (command) => {
   }
 }
 
+const getElementFromNode = (node) =>
+  node?.nodeType === Node.TEXT_NODE ? node.parentElement : node instanceof Element ? node : null
+
+const getClosestAlignableBlock = (node) => {
+  if (!node || !editor.value) {
+    return null
+  }
+
+  let current = getElementFromNode(node)
+  while (current && current !== editor.value) {
+    if (ALIGNABLE_BLOCK_TAGS.has(current.tagName)) {
+      return current
+    }
+    current = current.parentElement
+  }
+  return null
+}
+
+const getAlignableBlockAtRangeStart = (range) => {
+  if (!range || !editor.value) {
+    return null
+  }
+
+  const direct = getClosestAlignableBlock(range.startContainer)
+  if (direct) {
+    return direct
+  }
+
+  if (range.startContainer !== editor.value) {
+    return null
+  }
+
+  const children = Array.from(editor.value.childNodes)
+  if (!children.length) {
+    return null
+  }
+
+  const index = Math.min(
+    Math.max(0, range.startOffset - 1),
+    children.length - 1,
+  )
+  const candidate = children[index] || children[0]
+  const resolved = getClosestAlignableBlock(candidate)
+  if (resolved) {
+    return resolved
+  }
+
+  if (candidate instanceof Element) {
+    const nested = candidate.querySelector(
+      'p, div, h1, h2, h3, h4, h5, h6, blockquote, li, td, th',
+    )
+    if (nested) {
+      return nested
+    }
+  }
+
+  return null
+}
+
+const getAlignableBlocksFromRange = (range) => {
+  if (!editor.value) {
+    return []
+  }
+
+  if (range.collapsed) {
+    const closest = getAlignableBlockAtRangeStart(range)
+    return closest ? [closest] : []
+  }
+
+  const candidates = Array.from(
+    editor.value.querySelectorAll('p, div, h1, h2, h3, h4, h5, h6, blockquote, li, td, th'),
+  ).filter((element) => {
+    try {
+      return range.intersectsNode(element)
+    } catch {
+      return false
+    }
+  })
+
+  if (!candidates.length) {
+    const closest = getAlignableBlockAtRangeStart(range)
+    return closest ? [closest] : []
+  }
+
+  // Prefer deepest blocks so parent wrappers do not override selected children.
+  return candidates.filter(
+    (element) =>
+      !candidates.some(
+        (other) => other !== element && element.contains(other),
+      ),
+  )
+}
+
+const applyTextAlignToElement = (element, alignment) => {
+  if (!(element instanceof HTMLElement)) {
+    return
+  }
+
+  if (alignment === DEFAULT_TEXT_ALIGN) {
+    element.style.removeProperty('text-align')
+    if (!element.getAttribute('style')?.trim()) {
+      element.removeAttribute('style')
+    }
+    return
+  }
+
+  element.style.setProperty('text-align', alignment)
+}
+
+const setTextAlignAtSelection = (alignment) => {
+  if (!TEXT_ALIGN_VALUES.includes(alignment)) {
+    return
+  }
+
+  if (selectedTableCells.value.length && !editingTableCell.value) {
+    for (const cell of selectedTableCells.value) {
+      applyTextAlignToElement(cell, alignment)
+    }
+    syncModelFromEditor()
+    updateActiveTools()
+    return
+  }
+
+  focusEditor()
+  const selection = window.getSelection()
+  if (!selection) {
+    return
+  }
+
+  let range = null
+  if (selection.rangeCount && isNodeInEditor(selection.anchorNode)) {
+    range = selection.getRangeAt(0)
+  } else if (fontSizeRange.value) {
+    range = fontSizeRange.value.cloneRange()
+    selection.removeAllRanges()
+    selection.addRange(range)
+  }
+
+  if (!range || !isNodeInEditor(range.commonAncestorContainer)) {
+    return
+  }
+
+  const blocks = getAlignableBlocksFromRange(range)
+  if (!blocks.length) {
+    const fallbackCommand =
+      alignment === 'center'
+        ? 'justifyCenter'
+        : alignment === 'right'
+          ? 'justifyRight'
+          : 'justifyLeft'
+    document.execCommand(fallbackCommand, false, null)
+    fontSizeRange.value = getCurrentEditorRange()
+    syncModelFromEditor()
+    updateActiveTools()
+    return
+  }
+
+  for (const block of blocks) {
+    applyTextAlignToElement(block, alignment)
+  }
+
+  fontSizeRange.value = range.cloneRange()
+  syncModelFromEditor()
+  updateActiveTools()
+}
+
+const getTextAlignFromNode = (node) => {
+  if (!node || !editor.value) {
+    return DEFAULT_TEXT_ALIGN
+  }
+
+  let current = getElementFromNode(node)
+  while (current && current !== editor.value) {
+    const align = extractTextAlignFromStyle(current.getAttribute('style'))
+    if (align) {
+      return align
+    }
+    current = current.parentElement
+  }
+
+  return DEFAULT_TEXT_ALIGN
+}
+
 const parseFontSizeInput = (rawValue) => {
   if (rawValue === '' || rawValue === 'default' || rawValue === null) {
     return null
@@ -902,6 +1195,68 @@ const clearFontSizeStylesInFragment = (fragment) => {
   }
 }
 
+const clearDescendantFontSizeStyles = (root) => {
+  const descendants = Array.from(root.querySelectorAll('*'))
+  for (const descendant of descendants) {
+    if (!(descendant instanceof HTMLElement)) {
+      continue
+    }
+    if (descendant.style.fontSize) {
+      descendant.style.removeProperty('font-size')
+      if (!descendant.getAttribute('style')?.trim()) {
+        descendant.removeAttribute('style')
+      }
+    }
+  }
+}
+
+const getListItemsFromRange = (range) => {
+  if (!editor.value) {
+    return []
+  }
+
+  if (range.collapsed) {
+    const node = range.startContainer
+    const element =
+      node.nodeType === Node.TEXT_NODE ? node.parentElement : node
+    if (!(element instanceof Element)) {
+      return []
+    }
+    const item = element.closest('li')
+    return item && editor.value.contains(item) ? [item] : []
+  }
+
+  const items = Array.from(editor.value.querySelectorAll('li'))
+  return items.filter((item) => {
+    try {
+      return range.intersectsNode(item)
+    } catch {
+      return false
+    }
+  })
+}
+
+const applyFontSizeToListItems = (items, parsedSize) => {
+  const targetSize = parsedSize ?? DEFAULT_FONT_SIZE
+  for (const item of items) {
+    if (!(item instanceof HTMLElement)) {
+      continue
+    }
+
+    // Make list marker and content scale together at li level.
+    clearDescendantFontSizeStyles(item)
+
+    if (parsedSize === null) {
+      item.style.removeProperty('font-size')
+      if (!item.getAttribute('style')?.trim()) {
+        item.removeAttribute('style')
+      }
+    } else {
+      item.setAttribute('style', `font-size: ${targetSize}px;`)
+    }
+  }
+}
+
 const applyFontSizeToTableCells = (cells, parsedSize) => {
   const targetSize = parsedSize ?? DEFAULT_FONT_SIZE
   for (const cell of cells) {
@@ -945,6 +1300,16 @@ const setFontSizeAtSelection = (rawValue) => {
     selection.addRange(range)
   }
   if (!range || !isNodeInEditor(range.commonAncestorContainer)) {
+    return
+  }
+
+  const selectedListItems = getListItemsFromRange(range)
+  if (selectedListItems.length) {
+    applyFontSizeToListItems(selectedListItems, parsed)
+    currentFontSize.value = String(targetSize)
+    fontSizeRange.value = range.cloneRange()
+    syncModelFromEditor()
+    updateActiveTools()
     return
   }
 
@@ -1672,13 +2037,43 @@ const updateActiveTools = () => {
   const selectedCellSize = selectedCell
     ? extractFontSizeFromStyle(selectedCell.getAttribute('style'))
     : null
+  const selectedCellAlign = selectedCell
+    ? extractTextAlignFromStyle(selectedCell.getAttribute('style'))
+    : null
+  const listItemNode =
+    node && node instanceof Node
+      ? (
+          (node.nodeType === Node.TEXT_NODE
+            ? node.parentElement
+            : node instanceof Element
+              ? node
+              : null)
+        )?.closest('li')
+      : null
+  const selectedListSize =
+    listItemNode && editor.value?.contains(listItemNode)
+      ? extractFontSizeFromStyle(listItemNode.getAttribute('style'))
+      : null
   const detectedFontSize =
     selectedCellSize
       ? String(selectedCellSize)
+      : selectedListSize
+        ? String(selectedListSize)
       : node && !selectedImageNode
         ? getInlineFontSizeFromNode(node)
         : ''
   currentFontSize.value = detectedFontSize || String(DEFAULT_FONT_SIZE)
+
+  const detectedAlign =
+    selectedCellAlign ||
+    (node && !selectedImageNode ? getTextAlignFromNode(node) : DEFAULT_TEXT_ALIGN)
+  if (detectedAlign === 'center') {
+    active.add('alignCenter')
+  } else if (detectedAlign === 'right') {
+    active.add('alignRight')
+  } else {
+    active.add('alignLeft')
+  }
 
   if (!node && !selectedCell && !selectedImageNode && !showImagePanel.value) {
     activeToolKeys.value = []
@@ -2167,6 +2562,15 @@ const handleAction = (action, contextOverride = null) => {
       break
     case 'underline':
       runCommand('underline')
+      break
+    case 'alignLeft':
+      setTextAlignAtSelection('left')
+      break
+    case 'alignCenter':
+      setTextAlignAtSelection('center')
+      break
+    case 'alignRight':
+      setTextAlignAtSelection('right')
       break
     case 'list':
       runCommand('insertUnorderedList')
