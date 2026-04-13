@@ -74,6 +74,14 @@ const activeToolKeys = ref([])
 const showTableContextMenu = ref(false)
 const tableContextPosition = ref({ top: 0, left: 0 })
 const tableContextCell = ref(null)
+const selectedTableCells = ref([])
+const tableRangeAnchor = ref(null)
+const tableRangeFocus = ref(null)
+const isTableDragging = ref(false)
+const editingTableCell = ref(null)
+
+const TABLE_SELECTED_CLASS = 'table-cell-selected'
+const TABLE_EDITING_CLASS = 'table-cell-editing'
 
 const tableContextActions = [
   { key: 'tableMerge', label: 'Merge' },
@@ -240,6 +248,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', onDocumentPointerDown)
   document.removeEventListener('selectionchange', onSelectionChange)
+  stopTableDragSelection()
 })
 
 const focusEditor = () => {
@@ -256,6 +265,52 @@ const closeMentionMenu = () => {
 const closeTableContextMenu = () => {
   showTableContextMenu.value = false
   tableContextCell.value = null
+}
+
+const clearSelectedTableCells = () => {
+  for (const cell of selectedTableCells.value) {
+    cell.classList.remove(TABLE_SELECTED_CLASS)
+  }
+  selectedTableCells.value = []
+  tableRangeAnchor.value = null
+  tableRangeFocus.value = null
+}
+
+const setSelectedTableCells = (cells) => {
+  for (const cell of selectedTableCells.value) {
+    cell.classList.remove(TABLE_SELECTED_CLASS)
+  }
+
+  const unique = []
+  for (const cell of cells) {
+    if (!cell || !editor.value?.contains(cell)) {
+      continue
+    }
+    if (!unique.includes(cell)) {
+      unique.push(cell)
+    }
+  }
+
+  for (const cell of unique) {
+    if (cell !== editingTableCell.value) {
+      cell.classList.add(TABLE_SELECTED_CLASS)
+    }
+  }
+  selectedTableCells.value = unique
+}
+
+const getPrimarySelectedTableCell = () => {
+  if (
+    editingTableCell.value &&
+    editor.value?.contains(editingTableCell.value)
+  ) {
+    return editingTableCell.value
+  }
+
+  const first = selectedTableCells.value.find((cell) =>
+    editor.value?.contains(cell),
+  )
+  return first || null
 }
 
 const formatVariableToken = (key) => `{{${key}}}`
@@ -314,6 +369,11 @@ const getTableContextFromCell = (cell) => {
 }
 
 const getCurrentTableContext = () => {
+  const selectedCell = getPrimarySelectedTableCell()
+  if (selectedCell) {
+    return getTableContextFromCell(selectedCell)
+  }
+
   const selection = window.getSelection()
   if (!selection || !selection.rangeCount) {
     return null
@@ -347,73 +407,29 @@ const getClosestTableCell = (node) => {
 }
 
 const getSelectedTableRange = () => {
-  const selection = window.getSelection()
-  if (!selection || !selection.rangeCount) {
-    return null
-  }
-
-  const anchorCell = getClosestTableCell(selection.anchorNode)
-  const focusCell = getClosestTableCell(selection.focusNode)
-  if (!anchorCell || !focusCell) {
-    return null
-  }
-
-  const anchorTable = anchorCell.closest('table')
-  const focusTable = focusCell.closest('table')
-  if (!anchorTable || anchorTable !== focusTable) {
-    return null
-  }
-
-  const table = anchorTable
-  const rows = Array.from(table.querySelectorAll('tr'))
-  const anchorRow = anchorCell.closest('tr')
-  const focusRow = focusCell.closest('tr')
-  if (!anchorRow || !focusRow) {
-    return null
-  }
-
-  const anchorRowIndex = rows.indexOf(anchorRow)
-  const focusRowIndex = rows.indexOf(focusRow)
-  const anchorColIndex = Array.from(anchorRow.children).indexOf(anchorCell)
-  const focusColIndex = Array.from(focusRow.children).indexOf(focusCell)
-  if (
-    anchorRowIndex < 0 ||
-    focusRowIndex < 0 ||
-    anchorColIndex < 0 ||
-    focusColIndex < 0
-  ) {
-    return null
-  }
-
-  const rowStart = Math.min(anchorRowIndex, focusRowIndex)
-  const rowEnd = Math.max(anchorRowIndex, focusRowIndex)
-  const colStart = Math.min(anchorColIndex, focusColIndex)
-  const colEnd = Math.max(anchorColIndex, focusColIndex)
-
-  const cells = []
-  for (let rowIndex = rowStart; rowIndex <= rowEnd; rowIndex += 1) {
-    const row = rows[rowIndex]
-    const rowCells = Array.from(row.children)
-    for (let colIndex = colStart; colIndex <= colEnd; colIndex += 1) {
-      const cell = rowCells[colIndex]
-      if (!cell) {
-        return null
-      }
-      cells.push(cell)
+  if (tableRangeAnchor.value && tableRangeFocus.value) {
+    const range = selectTableCellRange(
+      tableRangeAnchor.value,
+      tableRangeFocus.value,
+    )
+    if (range) {
+      return range
     }
   }
 
-  return {
-    table,
-    rows,
-    cells,
-    rowStart,
-    rowEnd,
-    colStart,
-    colEnd,
-    rowCount: rowEnd - rowStart + 1,
-    colCount: colEnd - colStart + 1,
+  const selection = window.getSelection()
+  if (selection && selection.rangeCount) {
+    const anchorCell = getClosestTableCell(selection.anchorNode)
+    const focusCell = getClosestTableCell(selection.focusNode)
+    if (anchorCell && focusCell) {
+      const range = selectTableCellRange(anchorCell, focusCell)
+      if (range) {
+        return range
+      }
+    }
   }
+
+  return null
 }
 
 const buildTableLayout = (table) => {
@@ -454,6 +470,133 @@ const buildTableLayout = (table) => {
   return { rows, grid, rowEntries }
 }
 
+const getCellPositionInLayout = (layout, targetCell) => {
+  for (let rowIndex = 0; rowIndex < layout.grid.length; rowIndex += 1) {
+    const row = layout.grid[rowIndex]
+    for (let colIndex = 0; colIndex < row.length; colIndex += 1) {
+      if (row[colIndex] === targetCell) {
+        return { row: rowIndex, col: colIndex }
+      }
+    }
+  }
+  return null
+}
+
+const selectTableCellRange = (anchorCell, focusCell = anchorCell) => {
+  if (!anchorCell || !focusCell) {
+    clearSelectedTableCells()
+    return null
+  }
+
+  const anchorTable = anchorCell.closest('table')
+  const focusTable = focusCell.closest('table')
+  if (!anchorTable || anchorTable !== focusTable) {
+    clearSelectedTableCells()
+    return null
+  }
+
+  const layout = buildTableLayout(anchorTable)
+  const anchorPos = getCellPositionInLayout(layout, anchorCell)
+  const focusPos = getCellPositionInLayout(layout, focusCell)
+  if (!anchorPos || !focusPos) {
+    clearSelectedTableCells()
+    return null
+  }
+
+  const rowStart = Math.min(anchorPos.row, focusPos.row)
+  const rowEnd = Math.max(anchorPos.row, focusPos.row)
+  const colStart = Math.min(anchorPos.col, focusPos.col)
+  const colEnd = Math.max(anchorPos.col, focusPos.col)
+
+  const cells = []
+  for (let rowIndex = rowStart; rowIndex <= rowEnd; rowIndex += 1) {
+    for (let colIndex = colStart; colIndex <= colEnd; colIndex += 1) {
+      const cell = layout.grid[rowIndex]?.[colIndex]
+      if (cell) {
+        cells.push(cell)
+      }
+    }
+  }
+
+  tableRangeAnchor.value = anchorCell
+  tableRangeFocus.value = focusCell
+  setSelectedTableCells(cells)
+
+  return {
+    table: anchorTable,
+    layout,
+    rowStart,
+    rowEnd,
+    colStart,
+    colEnd,
+    rowCount: rowEnd - rowStart + 1,
+    colCount: colEnd - colStart + 1,
+    cells: selectedTableCells.value,
+  }
+}
+
+const placeCaretAtCellEnd = (cell) => {
+  const selection = window.getSelection()
+  if (!selection) {
+    return
+  }
+
+  const range = document.createRange()
+  range.selectNodeContents(cell)
+  range.collapse(false)
+  selection.removeAllRanges()
+  selection.addRange(range)
+}
+
+const exitTableCellEditMode = () => {
+  if (!editingTableCell.value) {
+    return
+  }
+
+  const cell = editingTableCell.value
+  cell.classList.remove(TABLE_EDITING_CLASS)
+  cell.removeAttribute('contenteditable')
+  editingTableCell.value = null
+  syncModelFromEditor()
+  updateActiveTools()
+}
+
+const enterTableCellEditMode = (cell) => {
+  if (!cell || !editor.value?.contains(cell)) {
+    return
+  }
+
+  if (editingTableCell.value && editingTableCell.value !== cell) {
+    exitTableCellEditMode()
+  }
+
+  editingTableCell.value = cell
+  cell.classList.remove(TABLE_SELECTED_CLASS)
+  cell.classList.add(TABLE_EDITING_CLASS)
+  cell.setAttribute('contenteditable', 'true')
+  cell.focus()
+  placeCaretAtCellEnd(cell)
+}
+
+const getCellFromPointerEvent = (event) => {
+  const fromTarget = getClosestTableCell(event.target)
+  if (fromTarget) {
+    return fromTarget
+  }
+
+  const pointElement = document.elementFromPoint(event.clientX, event.clientY)
+  return getClosestTableCell(pointElement)
+}
+
+const stopTableDragSelection = () => {
+  if (!isTableDragging.value) {
+    return
+  }
+  isTableDragging.value = false
+  document.removeEventListener('mousemove', onTableDragMove)
+  document.removeEventListener('mouseup', onTableDragEnd)
+}
+
 const setCaretToElementStart = (element) => {
   const selection = window.getSelection()
   if (!selection) {
@@ -471,6 +614,10 @@ const removeTableWithFallbackParagraph = (table) => {
   const paragraph = document.createElement('p')
   paragraph.innerHTML = '<br>'
   table.replaceWith(paragraph)
+  clearSelectedTableCells()
+  if (editingTableCell.value) {
+    editingTableCell.value = null
+  }
   setCaretToElementStart(paragraph)
 }
 
@@ -484,7 +631,7 @@ const mergeSelectedTableCells = () => {
     return
   }
 
-  const topLeftRow = selection.rows[selection.rowStart]
+  const topLeftRow = selection.layout.rows[selection.rowStart]
   const topLeftCell = Array.from(topLeftRow.children)[selection.colStart]
   if (!topLeftCell) {
     return
@@ -524,6 +671,9 @@ const mergeSelectedTableCells = () => {
     }
   }
 
+  tableRangeAnchor.value = topLeftCell
+  tableRangeFocus.value = topLeftCell
+  selectTableCellRange(topLeftCell, topLeftCell)
   setCaretToElementStart(topLeftCell)
   syncModelFromEditor()
 }
@@ -588,6 +738,9 @@ const unmergeCurrentTableCell = (contextOverride = null) => {
     }
   }
 
+  tableRangeAnchor.value = cell
+  tableRangeFocus.value = cell
+  selectTableCellRange(cell, cell)
   setCaretToElementStart(cell)
   syncModelFromEditor()
 }
@@ -628,6 +781,9 @@ const deleteCurrentTableRow = (contextOverride = null) => {
     const nextCells = Array.from(nextRow.children)
     const targetCell = nextCells[Math.min(cellIndex, Math.max(0, nextCells.length - 1))]
     if (targetCell) {
+      tableRangeAnchor.value = targetCell
+      tableRangeFocus.value = targetCell
+      selectTableCellRange(targetCell, targetCell)
       setCaretToElementStart(targetCell)
     }
   }
@@ -658,6 +814,9 @@ const addCurrentTableRow = (contextOverride = null) => {
   row.insertAdjacentElement('afterend', newRow)
   const firstCell = newRow.children[0]
   if (firstCell) {
+    tableRangeAnchor.value = firstCell
+    tableRangeFocus.value = firstCell
+    selectTableCellRange(firstCell, firstCell)
     setCaretToElementStart(firstCell)
   }
   syncModelFromEditor()
@@ -693,6 +852,9 @@ const addCurrentTableColumn = (contextOverride = null) => {
   const targetRow = latestRows[Math.min(rowIndex, latestRows.length - 1)]
   const targetCell = targetRow?.children[targetIndex]
   if (targetCell) {
+    tableRangeAnchor.value = targetCell
+    tableRangeFocus.value = targetCell
+    selectTableCellRange(targetCell, targetCell)
     setCaretToElementStart(targetCell)
   }
 
@@ -747,6 +909,9 @@ const deleteCurrentTableColumn = (contextOverride = null) => {
   const targetCells = Array.from(targetRow.children)
   const targetCell = targetCells[Math.min(cellIndex, Math.max(0, targetCells.length - 1))]
   if (targetCell) {
+    tableRangeAnchor.value = targetCell
+    tableRangeFocus.value = targetCell
+    selectTableCellRange(targetCell, targetCell)
     setCaretToElementStart(targetCell)
   }
 
@@ -786,7 +951,12 @@ const updateActiveTools = () => {
   if (findAncestorByTag(node, ['BLOCKQUOTE'])) {
     active.add('quote')
   }
-  if (findAncestorByTag(node, ['TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD'])) {
+  const selectedCell = getPrimarySelectedTableCell()
+  const inTable =
+    !!selectedCell ||
+    !!findAncestorByTag(node, ['TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD'])
+
+  if (inTable) {
     active.add('table')
     active.add('tableMerge')
     active.add('tableAddRow')
@@ -794,7 +964,9 @@ const updateActiveTools = () => {
     active.add('tableDeleteRow')
     active.add('tableDeleteCol')
 
-    const context = getCurrentTableContext()
+    const context = selectedCell
+      ? getTableContextFromCell(selectedCell)
+      : getCurrentTableContext()
     if (context) {
       const rowSpan = Math.max(1, Number.parseInt(context.cell.getAttribute('rowspan') || '1', 10))
       const colSpan = Math.max(1, Number.parseInt(context.cell.getAttribute('colspan') || '1', 10))
@@ -893,11 +1065,124 @@ const onEditorCaretChange = () => {
   updateActiveTools()
 }
 
+const onTableDragMove = (event) => {
+  if (!isTableDragging.value || !tableRangeAnchor.value) {
+    return
+  }
+
+  const cell = getCellFromPointerEvent(event)
+  if (!cell) {
+    return
+  }
+
+  const anchorTable = tableRangeAnchor.value.closest('table')
+  if (!anchorTable || cell.closest('table') !== anchorTable) {
+    return
+  }
+
+  event.preventDefault()
+  tableRangeFocus.value = cell
+  selectTableCellRange(tableRangeAnchor.value, cell)
+  updateActiveTools()
+}
+
+const onTableDragEnd = () => {
+  stopTableDragSelection()
+  updateActiveTools()
+}
+
+const onEditorMouseDown = (event) => {
+  if (event.button !== 0) {
+    return
+  }
+
+  const cell = getClosestTableCell(event.target)
+  if (!cell) {
+    stopTableDragSelection()
+    if (editingTableCell.value) {
+      exitTableCellEditMode()
+    }
+    clearSelectedTableCells()
+    return
+  }
+
+  if (editingTableCell.value === cell) {
+    return
+  }
+
+  if (editingTableCell.value && editingTableCell.value !== cell) {
+    exitTableCellEditMode()
+  }
+
+  closeMentionMenu()
+  closeTableContextMenu()
+
+  event.preventDefault()
+  tableRangeAnchor.value = cell
+  tableRangeFocus.value = cell
+  selectTableCellRange(cell, cell)
+  updateActiveTools()
+
+  isTableDragging.value = true
+  document.addEventListener('mousemove', onTableDragMove)
+  document.addEventListener('mouseup', onTableDragEnd)
+}
+
+const onEditorDblClick = (event) => {
+  const cell = getClosestTableCell(event.target)
+  if (!cell) {
+    return
+  }
+
+  event.preventDefault()
+  stopTableDragSelection()
+  tableRangeAnchor.value = cell
+  tableRangeFocus.value = cell
+  selectTableCellRange(cell, cell)
+  enterTableCellEditMode(cell)
+  updateActiveTools()
+}
+
 const onEditorKeydown = (event) => {
-  if (!showMentionMenu.value) {
-    if (showTableContextMenu.value && event.key === 'Escape') {
+  if (event.key === 'Escape') {
+    if (showMentionMenu.value) {
+      event.preventDefault()
+      closeMentionMenu()
+      return
+    }
+    if (showTableContextMenu.value) {
       event.preventDefault()
       closeTableContextMenu()
+      return
+    }
+    if (editingTableCell.value) {
+      event.preventDefault()
+      exitTableCellEditMode()
+      const cell = getPrimarySelectedTableCell()
+      if (cell) {
+        selectTableCellRange(cell, cell)
+      }
+      return
+    }
+  }
+
+  if (!showMentionMenu.value) {
+    if (selectedTableCells.value.length && !editingTableCell.value) {
+      const ignoredKeys = new Set([
+        'Shift',
+        'Control',
+        'Alt',
+        'Meta',
+        'CapsLock',
+        'Tab',
+        'ArrowUp',
+        'ArrowDown',
+        'ArrowLeft',
+        'ArrowRight',
+      ])
+      if (!ignoredKeys.has(event.key)) {
+        event.preventDefault()
+      }
     }
     return
   }
@@ -926,10 +1211,6 @@ const onEditorKeydown = (event) => {
     return
   }
 
-  if (event.key === 'Escape') {
-    event.preventDefault()
-    closeMentionMenu()
-  }
 }
 
 const onDocumentPointerDown = (event) => {
@@ -951,6 +1232,16 @@ const onDocumentPointerDown = (event) => {
     }
     closeTableContextMenu()
   }
+
+  if (editingTableCell.value) {
+    if (
+      target instanceof Node &&
+      editingTableCell.value.contains(target)
+    ) {
+      return
+    }
+    exitTableCellEditMode()
+  }
 }
 
 const onSelectionChange = () => {
@@ -966,6 +1257,14 @@ const onEditorContextMenu = (event) => {
 
   event.preventDefault()
   closeMentionMenu()
+  if (editingTableCell.value && editingTableCell.value !== context.cell) {
+    exitTableCellEditMode()
+  }
+  if (!selectedTableCells.value.includes(context.cell)) {
+    tableRangeAnchor.value = context.cell
+    tableRangeFocus.value = context.cell
+    selectTableCellRange(context.cell, context.cell)
+  }
   tableContextCell.value = context.cell
 
   const maxWidth = 200
@@ -1110,6 +1409,11 @@ const handleAction = (action, contextOverride = null) => {
       deleteCurrentTableColumn(contextOverride)
       break
     case 'clear':
+      closeMentionMenu()
+      closeTableContextMenu()
+      stopTableDragSelection()
+      exitTableCellEditMode()
+      clearSelectedTableCells()
       contentHtml.value = ''
       nextTick(() => {
         syncEditorFromModel()
@@ -1153,6 +1457,8 @@ const handleAction = (action, contextOverride = null) => {
         role="textbox"
         aria-multiline="true"
         data-placeholder="Start writing your content..."
+        @mousedown="onEditorMouseDown"
+        @dblclick="onEditorDblClick"
         @input="onEditorInput"
         @keyup="onEditorCaretChange"
         @mouseup="onEditorCaretChange"
@@ -1347,11 +1653,25 @@ const handleAction = (action, contextOverride = null) => {
   padding: 0.45rem 0.55rem;
   text-align: left;
   vertical-align: top;
+  user-select: none;
+  cursor: cell;
 }
 
 .editor-input :deep(th) {
   background: #f3f7fb;
   font-weight: 600;
+}
+
+.editor-input :deep(.table-cell-selected) {
+  background: #dbf5ff;
+  box-shadow: inset 0 0 0 2px #38bdf8;
+}
+
+.editor-input :deep(.table-cell-editing) {
+  user-select: text;
+  cursor: text;
+  background: #ffffff;
+  box-shadow: inset 0 0 0 2px #0f766e;
 }
 
 .mention-menu {
