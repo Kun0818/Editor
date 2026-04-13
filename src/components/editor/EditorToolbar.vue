@@ -18,6 +18,7 @@ const tools = [
   { key: 'italic', label: 'Italic', title: 'Italic text' },
   { key: 'quote', label: 'Quote', title: 'Block quote' },
   { key: 'list', label: 'List', title: 'Bullet list' },
+  { key: 'image', label: 'Image', title: 'Insert or edit image' },
   { key: 'table', label: 'Table', title: 'Insert a 3x3 table' },
   { key: 'tableMerge', label: 'Merge', title: 'Merge selected table cells' },
   { key: 'tableUnmerge', label: 'Unmerge', title: 'Split current merged cell' },

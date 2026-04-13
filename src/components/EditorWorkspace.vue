@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import EditorStatusBar from './editor/EditorStatusBar.vue'
 import EditorToolbar from './editor/EditorToolbar.vue'
 
@@ -46,6 +46,7 @@ const allowedTags = new Set([
   'tr',
   'th',
   'td',
+  'img',
   'a',
   'time',
   'br',
@@ -57,6 +58,7 @@ const allowedAttrs = {
   time: new Set(['datetime']),
   th: new Set(['colspan', 'rowspan']),
   td: new Set(['colspan', 'rowspan']),
+  img: new Set(['src', 'alt', 'title', 'width', 'height', 'data-align']),
 }
 
 const title = ref(defaultTitle)
@@ -71,6 +73,10 @@ const mentionRange = ref(null)
 const mentionPosition = ref({ top: 0, left: 0 })
 const mentionActiveIndex = ref(0)
 const activeToolKeys = ref([])
+const imageFileInput = ref(null)
+const showImagePanel = ref(false)
+const selectedImage = ref(null)
+const imageInsertRange = ref(null)
 const showTableContextMenu = ref(false)
 const tableContextPosition = ref({ top: 0, left: 0 })
 const tableContextCell = ref(null)
@@ -82,6 +88,17 @@ const editingTableCell = ref(null)
 
 const TABLE_SELECTED_CLASS = 'table-cell-selected'
 const TABLE_EDITING_CLASS = 'table-cell-editing'
+const IMAGE_SELECTED_CLASS = 'editor-image-selected'
+const imageAlignOptions = ['left', 'center', 'right']
+
+const imageForm = reactive({
+  src: '',
+  alt: '',
+  title: '',
+  width: '',
+  height: '',
+  align: 'center',
+})
 
 const tableContextActions = [
   { key: 'tableMerge', label: 'Merge' },
@@ -100,6 +117,27 @@ const extractText = (rawHtml) => {
 
 const isSafeHref = (href) =>
   /^(https?:|mailto:|tel:|\/|#)/i.test(href.trim())
+
+const isSafeImageSrc = (src) =>
+  /^(https?:|data:image\/|blob:|\/|\.\/|\.\.\/)/i.test(src.trim())
+
+const normalizeImageDimension = (value) => {
+  if (value === null || value === undefined) {
+    return ''
+  }
+  const cleaned = String(value).trim()
+  if (!cleaned) {
+    return ''
+  }
+  if (!/^\d{1,4}$/.test(cleaned)) {
+    return ''
+  }
+  const parsed = Number.parseInt(cleaned, 10)
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return ''
+  }
+  return String(parsed)
+}
 
 const sanitizeHtml = (rawHtml) => {
   const parser = new DOMParser()
@@ -129,6 +167,37 @@ const sanitizeHtml = (rawHtml) => {
         node.setAttribute('rel', 'noopener noreferrer')
       }
     }
+
+    if (tag === 'img') {
+      const src = node.getAttribute('src')?.trim() || ''
+      if (!src || !isSafeImageSrc(src)) {
+        node.remove()
+        continue
+      }
+
+      const width = normalizeImageDimension(node.getAttribute('width'))
+      const height = normalizeImageDimension(node.getAttribute('height'))
+      if (width) {
+        node.setAttribute('width', width)
+      } else {
+        node.removeAttribute('width')
+      }
+      if (height) {
+        node.setAttribute('height', height)
+      } else {
+        node.removeAttribute('height')
+      }
+
+      const align = (node.getAttribute('data-align') || 'center').toLowerCase()
+      if (imageAlignOptions.includes(align)) {
+        node.setAttribute('data-align', align)
+      } else {
+        node.setAttribute('data-align', 'center')
+      }
+      if (!node.hasAttribute('alt')) {
+        node.setAttribute('alt', '')
+      }
+    }
   }
 
   return doc.body.innerHTML
@@ -137,7 +206,10 @@ const sanitizeHtml = (rawHtml) => {
 const cleanEditorHtml = (rawHtml) => {
   const safe = sanitizeHtml(rawHtml)
   const plain = extractText(safe).trim()
-  return plain ? safe : ''
+  const temp = document.createElement('div')
+  temp.innerHTML = safe
+  const hasImage = !!temp.querySelector('img')
+  return plain || hasImage ? safe : ''
 }
 
 const syncEditorFromModel = () => {
@@ -267,6 +339,244 @@ const closeTableContextMenu = () => {
   tableContextCell.value = null
 }
 
+const resetImageForm = () => {
+  imageForm.src = ''
+  imageForm.alt = ''
+  imageForm.title = ''
+  imageForm.width = ''
+  imageForm.height = ''
+  imageForm.align = 'center'
+}
+
+const closeImagePanel = () => {
+  showImagePanel.value = false
+}
+
+const clearSelectedImage = () => {
+  if (selectedImage.value) {
+    selectedImage.value.classList.remove(IMAGE_SELECTED_CLASS)
+  }
+  selectedImage.value = null
+}
+
+const getClosestEditorImage = (node) => {
+  if (!node) {
+    return null
+  }
+  const element = node.nodeType === Node.TEXT_NODE ? node.parentElement : node
+  if (!(element instanceof Element)) {
+    return null
+  }
+  const image = element.closest('img')
+  if (!image || !editor.value?.contains(image)) {
+    return null
+  }
+  return image
+}
+
+const setImageFormFromElement = (image) => {
+  imageForm.src = image.getAttribute('src') || ''
+  imageForm.alt = image.getAttribute('alt') || ''
+  imageForm.title = image.getAttribute('title') || ''
+  imageForm.width = image.getAttribute('width') || ''
+  imageForm.height = image.getAttribute('height') || ''
+  const align = (image.getAttribute('data-align') || 'center').toLowerCase()
+  imageForm.align = imageAlignOptions.includes(align) ? align : 'center'
+}
+
+const selectImage = (image, { openPanel = false } = {}) => {
+  if (!image || !editor.value?.contains(image)) {
+    clearSelectedImage()
+    return
+  }
+  clearSelectedImage()
+  selectedImage.value = image
+  selectedImage.value.classList.add(IMAGE_SELECTED_CLASS)
+  setImageFormFromElement(image)
+  if (openPanel) {
+    showImagePanel.value = true
+  }
+}
+
+const getImagePayloadFromForm = () => {
+  const src = imageForm.src.trim()
+  if (!src || !isSafeImageSrc(src)) {
+    return null
+  }
+
+  return {
+    src,
+    alt: imageForm.alt.trim(),
+    title: imageForm.title.trim(),
+    width: normalizeImageDimension(imageForm.width),
+    height: normalizeImageDimension(imageForm.height),
+    align: imageAlignOptions.includes(imageForm.align) ? imageForm.align : 'center',
+  }
+}
+
+const applyImagePayloadToElement = (image, payload) => {
+  image.setAttribute('src', payload.src)
+  image.setAttribute('alt', payload.alt)
+  if (payload.title) {
+    image.setAttribute('title', payload.title)
+  } else {
+    image.removeAttribute('title')
+  }
+  if (payload.width) {
+    image.setAttribute('width', payload.width)
+  } else {
+    image.removeAttribute('width')
+  }
+  if (payload.height) {
+    image.setAttribute('height', payload.height)
+  } else {
+    image.removeAttribute('height')
+  }
+  image.setAttribute('data-align', payload.align)
+}
+
+const insertImageAtSelection = (payload) => {
+  if (!editor.value) {
+    return null
+  }
+
+  focusEditor()
+  const selection = window.getSelection()
+  if (!selection) {
+    return null
+  }
+
+  let range = null
+  if (selection.rangeCount && isNodeInEditor(selection.anchorNode)) {
+    range = selection.getRangeAt(0)
+  } else if (imageInsertRange.value) {
+    range = imageInsertRange.value.cloneRange()
+    selection.removeAllRanges()
+    selection.addRange(range)
+  } else {
+    range = document.createRange()
+    range.selectNodeContents(editor.value)
+    range.collapse(false)
+    selection.removeAllRanges()
+    selection.addRange(range)
+  }
+
+  const image = document.createElement('img')
+  applyImagePayloadToElement(image, payload)
+
+  range.deleteContents()
+  range.insertNode(image)
+  const spacer = document.createTextNode(' ')
+  image.after(spacer)
+
+  const caretRange = document.createRange()
+  caretRange.setStartAfter(spacer)
+  caretRange.collapse(true)
+  selection.removeAllRanges()
+  selection.addRange(caretRange)
+  imageInsertRange.value = caretRange.cloneRange()
+  return image
+}
+
+const applyImageChanges = () => {
+  const payload = getImagePayloadFromForm()
+  if (!payload) {
+    return
+  }
+
+  if (selectedImage.value && editor.value?.contains(selectedImage.value)) {
+    applyImagePayloadToElement(selectedImage.value, payload)
+    selectImage(selectedImage.value)
+  } else {
+    const inserted = insertImageAtSelection(payload)
+    if (inserted) {
+      selectImage(inserted)
+    }
+  }
+
+  syncModelFromEditor()
+  updateActiveTools()
+}
+
+const removeSelectedImage = () => {
+  const image = selectedImage.value
+  if (!image || !editor.value?.contains(image)) {
+    clearSelectedImage()
+    return
+  }
+
+  const selection = window.getSelection()
+  const fallbackNode = image.previousSibling || image.parentNode
+  image.remove()
+  clearSelectedImage()
+  syncModelFromEditor()
+
+  if (selection && fallbackNode) {
+    const range = document.createRange()
+    if (fallbackNode.nodeType === Node.TEXT_NODE) {
+      range.setStart(fallbackNode, fallbackNode.textContent?.length || 0)
+    } else {
+      range.selectNodeContents(fallbackNode)
+      range.collapse(false)
+    }
+    selection.removeAllRanges()
+    selection.addRange(range)
+    imageInsertRange.value = range.cloneRange()
+  }
+
+  updateActiveTools()
+}
+
+const triggerImageUpload = () => {
+  imageFileInput.value?.click()
+}
+
+const onImageFileChange = (event) => {
+  const files = event.target?.files
+  const file = files?.[0]
+  if (!file || !file.type.startsWith('image/')) {
+    if (event.target) {
+      event.target.value = ''
+    }
+    return
+  }
+
+  const reader = new FileReader()
+  reader.onload = () => {
+    if (typeof reader.result !== 'string') {
+      return
+    }
+    imageForm.src = reader.result
+    applyImageChanges()
+    showImagePanel.value = true
+  }
+  reader.readAsDataURL(file)
+
+  if (event.target) {
+    event.target.value = ''
+  }
+}
+
+const openImagePanelForEditing = () => {
+  closeMentionMenu()
+  closeTableContextMenu()
+  stopTableDragSelection()
+  if (editingTableCell.value) {
+    exitTableCellEditMode()
+  }
+  clearSelectedTableCells()
+
+  if (selectedImage.value && editor.value?.contains(selectedImage.value)) {
+    imageInsertRange.value = null
+    setImageFormFromElement(selectedImage.value)
+  } else {
+    imageInsertRange.value = getCurrentEditorRange()
+    resetImageForm()
+  }
+
+  showImagePanel.value = true
+}
+
 const clearSelectedTableCells = () => {
   for (const cell of selectedTableCells.value) {
     cell.classList.remove(TABLE_SELECTED_CLASS)
@@ -323,6 +633,17 @@ const isNodeInEditor = (node) => {
     return editor.value.contains(node.parentNode)
   }
   return editor.value.contains(node)
+}
+
+const getCurrentEditorRange = () => {
+  const selection = window.getSelection()
+  if (!selection || !selection.rangeCount) {
+    return null
+  }
+  if (!isNodeInEditor(selection.anchorNode)) {
+    return null
+  }
+  return selection.getRangeAt(0).cloneRange()
 }
 
 const queryStateSafe = (command) => {
@@ -935,42 +1256,54 @@ const deleteCurrentTableColumn = (contextOverride = null) => {
 }
 
 const updateActiveTools = () => {
-  const selection = window.getSelection()
-  if (!selection || !selection.rangeCount) {
-    activeToolKeys.value = []
-    return
-  }
-
-  const node = selection.anchorNode
-  if (!isNodeInEditor(node)) {
-    activeToolKeys.value = []
-    return
-  }
-
   const active = new Set()
-
-  if (queryStateSafe('bold')) {
-    active.add('bold')
-  }
-  if (queryStateSafe('italic')) {
-    active.add('italic')
-  }
-  if (queryStateSafe('insertUnorderedList')) {
-    active.add('list')
-  }
-
-  const headingNode = findAncestorByTag(node, ['H1', 'H2', 'H3', 'H4', 'H5'])
-  if (headingNode) {
-    active.add(`heading${headingNode.tagName.slice(1)}`)
-  }
-
-  if (findAncestorByTag(node, ['BLOCKQUOTE'])) {
-    active.add('quote')
-  }
   const selectedCell = getPrimarySelectedTableCell()
+  const selectedImageNode =
+    selectedImage.value && editor.value?.contains(selectedImage.value)
+      ? selectedImage.value
+      : null
+
+  if (!selectedImageNode && selectedImage.value) {
+    clearSelectedImage()
+  }
+
+  if (selectedImageNode) {
+    active.add('image')
+  }
+  if (showImagePanel.value) {
+    active.add('image')
+  }
+
+  const selection = window.getSelection()
+  const node =
+    selection && selection.rangeCount && isNodeInEditor(selection.anchorNode)
+      ? selection.anchorNode
+      : null
+
+  if (node) {
+    if (queryStateSafe('bold')) {
+      active.add('bold')
+    }
+    if (queryStateSafe('italic')) {
+      active.add('italic')
+    }
+    if (queryStateSafe('insertUnorderedList')) {
+      active.add('list')
+    }
+
+    const headingNode = findAncestorByTag(node, ['H1', 'H2', 'H3', 'H4', 'H5'])
+    if (headingNode) {
+      active.add(`heading${headingNode.tagName.slice(1)}`)
+    }
+
+    if (findAncestorByTag(node, ['BLOCKQUOTE'])) {
+      active.add('quote')
+    }
+  }
+
   const inTable =
     !!selectedCell ||
-    !!findAncestorByTag(node, ['TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD'])
+    !!(node && findAncestorByTag(node, ['TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD']))
 
   if (inTable) {
     active.add('table')
@@ -990,6 +1323,11 @@ const updateActiveTools = () => {
         active.add('tableUnmerge')
       }
     }
+  }
+
+  if (!node && !selectedCell && !selectedImageNode && !showImagePanel.value) {
+    activeToolKeys.value = []
+    return
   }
 
   activeToolKeys.value = Array.from(active)
@@ -1071,12 +1409,21 @@ const selectMention = (item) => {
 }
 
 const onEditorInput = () => {
+  if (selectedImage.value && !editor.value?.contains(selectedImage.value)) {
+    clearSelectedImage()
+  }
+  if (!selectedImage.value) {
+    imageInsertRange.value = getCurrentEditorRange()
+  }
   syncModelFromEditor()
   updateMentionFromSelection()
   updateActiveTools()
 }
 
 const onEditorCaretChange = () => {
+  if (!selectedImage.value) {
+    imageInsertRange.value = getCurrentEditorRange()
+  }
   updateMentionFromSelection()
   updateActiveTools()
 }
@@ -1112,6 +1459,25 @@ const onEditorMouseDown = (event) => {
     return
   }
 
+  const image = getClosestEditorImage(event.target)
+  if (image) {
+    stopTableDragSelection()
+    if (editingTableCell.value) {
+      exitTableCellEditMode()
+    }
+    clearSelectedTableCells()
+    closeMentionMenu()
+    closeTableContextMenu()
+    event.preventDefault()
+    selectImage(image)
+    updateActiveTools()
+    return
+  }
+
+  if (selectedImage.value) {
+    clearSelectedImage()
+  }
+
   const cell = getClosestTableCell(event.target)
   if (!cell) {
     stopTableDragSelection()
@@ -1119,6 +1485,7 @@ const onEditorMouseDown = (event) => {
       exitTableCellEditMode()
     }
     clearSelectedTableCells()
+    updateActiveTools()
     return
   }
 
@@ -1145,6 +1512,14 @@ const onEditorMouseDown = (event) => {
 }
 
 const onEditorDblClick = (event) => {
+  const image = getClosestEditorImage(event.target)
+  if (image) {
+    event.preventDefault()
+    selectImage(image, { openPanel: true })
+    updateActiveTools()
+    return
+  }
+
   const cell = getClosestTableCell(event.target)
   if (!cell) {
     return
@@ -1171,6 +1546,17 @@ const onEditorKeydown = (event) => {
       closeTableContextMenu()
       return
     }
+    if (showImagePanel.value) {
+      event.preventDefault()
+      closeImagePanel()
+      return
+    }
+    if (selectedImage.value) {
+      event.preventDefault()
+      clearSelectedImage()
+      updateActiveTools()
+      return
+    }
     if (editingTableCell.value) {
       event.preventDefault()
       exitTableCellEditMode()
@@ -1180,6 +1566,15 @@ const onEditorKeydown = (event) => {
       }
       return
     }
+  }
+
+  if (
+    selectedImage.value &&
+    (event.key === 'Backspace' || event.key === 'Delete')
+  ) {
+    event.preventDefault()
+    removeSelectedImage()
+    return
   }
 
   if (!showMentionMenu.value) {
@@ -1231,6 +1626,18 @@ const onEditorKeydown = (event) => {
 
 const onDocumentPointerDown = (event) => {
   const target = event.target
+
+  if (selectedImage.value) {
+    const clickedImage = getClosestEditorImage(target)
+    const clickedInImageUi =
+      target instanceof Element &&
+      (target.closest('.image-panel') || target.closest('.toolbar'))
+    if (clickedImage !== selectedImage.value && !clickedInImageUi) {
+      clearSelectedImage()
+      updateActiveTools()
+    }
+  }
+
   if (showMentionMenu.value) {
     if (
       editor.value?.contains(target) ||
@@ -1403,6 +1810,13 @@ const handleAction = (action, contextOverride = null) => {
     case 'list':
       runCommand('insertUnorderedList')
       break
+    case 'image':
+      if (showImagePanel.value) {
+        closeImagePanel()
+      } else {
+        openImagePanelForEditing()
+      }
+      break
     case 'table':
       insertDefaultTable(3, 3)
       break
@@ -1430,6 +1844,10 @@ const handleAction = (action, contextOverride = null) => {
       stopTableDragSelection()
       exitTableCellEditMode()
       clearSelectedTableCells()
+      clearSelectedImage()
+      closeImagePanel()
+      resetImageForm()
+      imageInsertRange.value = null
       contentHtml.value = ''
       nextTick(() => {
         syncEditorFromModel()
@@ -1463,6 +1881,97 @@ const handleAction = (action, contextOverride = null) => {
     </header>
 
     <EditorToolbar :active-tools="activeToolKeys" @action="handleAction" />
+    <input
+      ref="imageFileInput"
+      class="image-file-input"
+      type="file"
+      accept="image/*"
+      @change="onImageFileChange"
+    />
+
+    <section v-if="showImagePanel" class="image-panel" aria-label="Image settings">
+      <header class="image-panel-header">Image</header>
+      <form class="image-form" @submit.prevent="applyImageChanges">
+        <label class="image-field">
+          <span class="image-label">Image URL</span>
+          <input
+            v-model="imageForm.src"
+            class="image-input"
+            type="url"
+            placeholder="https://example.com/your-image.png"
+          />
+        </label>
+
+        <label class="image-field">
+          <span class="image-label">Alt</span>
+          <input
+            v-model="imageForm.alt"
+            class="image-input"
+            type="text"
+            placeholder="Describe this image"
+          />
+        </label>
+
+        <label class="image-field">
+          <span class="image-label">Title</span>
+          <input
+            v-model="imageForm.title"
+            class="image-input"
+            type="text"
+            placeholder="Optional title"
+          />
+        </label>
+
+        <div class="image-grid-two">
+          <label class="image-field">
+            <span class="image-label">Width</span>
+            <input
+              v-model="imageForm.width"
+              class="image-input"
+              type="number"
+              min="1"
+              max="4096"
+              placeholder="auto"
+            />
+          </label>
+          <label class="image-field">
+            <span class="image-label">Height</span>
+            <input
+              v-model="imageForm.height"
+              class="image-input"
+              type="number"
+              min="1"
+              max="4096"
+              placeholder="auto"
+            />
+          </label>
+        </div>
+
+        <label class="image-field">
+          <span class="image-label">Align</span>
+          <select v-model="imageForm.align" class="image-input image-select">
+            <option v-for="option in imageAlignOptions" :key="option" :value="option">
+              {{ option }}
+            </option>
+          </select>
+        </label>
+
+        <div class="image-actions">
+          <button type="submit" class="image-btn primary">
+            {{ selectedImage ? 'Update Image' : 'Insert Image' }}
+          </button>
+          <button type="button" class="image-btn" @click="triggerImageUpload">
+            {{ selectedImage ? 'Replace Upload' : 'Upload Image' }}
+          </button>
+          <button v-if="selectedImage" type="button" class="image-btn danger" @click="removeSelectedImage">
+            Delete Image
+          </button>
+          <button type="button" class="image-btn ghost" @click="closeImagePanel">
+            Close
+          </button>
+        </div>
+      </form>
+    </section>
 
     <article class="editor-pane" aria-label="Rich text editor">
       <header class="pane-header">Rich Text Draft</header>
@@ -1656,6 +2165,35 @@ const handleAction = (action, contextOverride = null) => {
   border-radius: 0.35rem;
 }
 
+.editor-input :deep(img) {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0.7rem auto;
+  border-radius: 0.45rem;
+}
+
+.editor-input :deep(img[data-align='left']) {
+  margin-left: 0;
+  margin-right: auto;
+}
+
+.editor-input :deep(img[data-align='center']) {
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.editor-input :deep(img[data-align='right']) {
+  margin-left: auto;
+  margin-right: 0;
+}
+
+.editor-input :deep(.editor-image-selected) {
+  outline: 2px solid #0ea5e9;
+  outline-offset: 2px;
+  box-shadow: 0 0 0 4px rgba(14, 165, 233, 0.16);
+}
+
 .editor-input :deep(table) {
   width: 100%;
   border-collapse: collapse;
@@ -1688,6 +2226,104 @@ const handleAction = (action, contextOverride = null) => {
   cursor: text;
   background: #ffffff;
   box-shadow: inset 0 0 0 2px #0f766e;
+}
+
+.image-file-input {
+  display: none;
+}
+
+.image-panel {
+  border: 1px solid var(--editor-border);
+  border-radius: 0.95rem;
+  background: linear-gradient(160deg, #ffffff, #f7fbff 45%, #eefcf8);
+  padding: 0.85rem 0.9rem;
+  display: grid;
+  gap: 0.75rem;
+}
+
+.image-panel-header {
+  color: var(--editor-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.8rem;
+}
+
+.image-form {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.image-grid-two {
+  display: grid;
+  gap: 0.65rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.image-field {
+  display: grid;
+  gap: 0.28rem;
+}
+
+.image-label {
+  font-size: 0.78rem;
+  color: var(--editor-muted);
+}
+
+.image-input {
+  width: 100%;
+  border: 1px solid var(--editor-border);
+  background: #ffffff;
+  color: var(--editor-ink);
+  border-radius: 0.6rem;
+  font-size: 0.86rem;
+  padding: 0.44rem 0.56rem;
+  outline: none;
+}
+
+.image-input:focus {
+  border-color: #0f766e;
+  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.14);
+}
+
+.image-select {
+  text-transform: capitalize;
+}
+
+.image-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.image-btn {
+  border: 1px solid var(--editor-border);
+  background: #ffffff;
+  color: var(--editor-ink);
+  border-radius: 0.58rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 0.34rem 0.64rem;
+  cursor: pointer;
+}
+
+.image-btn:hover {
+  border-color: #0f766e;
+}
+
+.image-btn.primary {
+  background: #0f766e;
+  border-color: #0f766e;
+  color: #ffffff;
+}
+
+.image-btn.danger {
+  border-color: #fecaca;
+  color: #b91c1c;
+  background: #fff1f2;
+}
+
+.image-btn.ghost {
+  background: #f8fafc;
 }
 
 .mention-menu {
@@ -1811,5 +2447,11 @@ const handleAction = (action, contextOverride = null) => {
   color: var(--editor-ink);
   background: #fbfcfe;
   padding: 0.9rem 1rem;
+}
+
+@media (max-width: 720px) {
+  .image-grid-two {
+    grid-template-columns: 1fr;
+  }
 }
 </style>
