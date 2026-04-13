@@ -546,9 +546,16 @@ const onImageFileChange = (event) => {
     if (typeof reader.result !== 'string') {
       return
     }
+
+    if (selectedImage.value && editor.value?.contains(selectedImage.value)) {
+      setImageFormFromElement(selectedImage.value)
+    } else {
+      resetImageForm()
+    }
+
     imageForm.src = reader.result
     applyImageChanges()
-    showImagePanel.value = true
+    closeImagePanel()
   }
   reader.readAsDataURL(file)
 
@@ -1287,6 +1294,9 @@ const updateActiveTools = () => {
     if (queryStateSafe('italic')) {
       active.add('italic')
     }
+    if (queryStateSafe('underline')) {
+      active.add('underline')
+    }
     if (queryStateSafe('insertUnorderedList')) {
       active.add('list')
     }
@@ -1512,7 +1522,7 @@ const onEditorDblClick = (event) => {
   const image = getClosestEditorImage(event.target)
   if (image) {
     event.preventDefault()
-    selectImage(image, { openPanel: true })
+    selectImage(image)
     updateActiveTools()
     return
   }
@@ -1801,15 +1811,16 @@ const handleAction = (action, contextOverride = null) => {
     case 'italic':
       runCommand('italic')
       break
+    case 'underline':
+      runCommand('underline')
+      break
     case 'list':
       runCommand('insertUnorderedList')
       break
     case 'image':
-      if (showImagePanel.value) {
-        closeImagePanel()
-      } else {
-        openImagePanelForEditing()
-      }
+      imageInsertRange.value = getCurrentEditorRange() || imageInsertRange.value
+      closeImagePanel()
+      triggerImageUpload()
       break
     case 'table':
       insertDefaultTable(3, 3)
@@ -1865,7 +1876,7 @@ const handleAction = (action, contextOverride = null) => {
   <main class="workspace">
     <EditorToolbar :active-tools="activeToolKeys" @action="handleAction" />
     <input ref="imageFileInput" class="image-file-input" type="file" accept="image/*" @change="onImageFileChange" />
-
+<!-- 
     <section v-if="showImagePanel" class="image-panel" aria-label="Image settings">
       <header class="image-panel-header">Image</header>
       <form class="image-form" @submit.prevent="applyImageChanges">
@@ -1920,7 +1931,7 @@ const handleAction = (action, contextOverride = null) => {
           </button>
         </div>
       </form>
-    </section>
+    </section> -->
 
     <article class="editor-pane" aria-label="Rich text editor">
       <!-- <header class="pane-header">Rich Text Draft</header> -->
