@@ -56,6 +56,7 @@ const allowedTags = new Set([
 const allowedAttrs = {
   a: new Set(['href', 'title', 'target', 'rel']),
   time: new Set(['datetime']),
+  span: new Set(['style']),
   th: new Set(['colspan', 'rowspan']),
   td: new Set(['colspan', 'rowspan']),
   img: new Set(['src', 'alt', 'title', 'width', 'height', 'data-align']),
@@ -73,6 +74,8 @@ const mentionRange = ref(null)
 const mentionPosition = ref({ top: 0, left: 0 })
 const mentionActiveIndex = ref(0)
 const activeToolKeys = ref([])
+const currentFontSize = ref('12')
+const fontSizeRange = ref(null)
 const imageFileInput = ref(null)
 const showImagePanel = ref(false)
 const selectedImage = ref(null)
@@ -90,6 +93,14 @@ const TABLE_SELECTED_CLASS = 'table-cell-selected'
 const TABLE_EDITING_CLASS = 'table-cell-editing'
 const IMAGE_SELECTED_CLASS = 'editor-image-selected'
 const imageAlignOptions = ['left', 'center', 'right']
+const FONT_SIZE_MIN = 8
+const FONT_SIZE_MAX = 40
+const DEFAULT_FONT_SIZE = 12
+const FONT_SIZE_MARKER = '\u200B'
+const fontSizeOptions = Array.from(
+  { length: FONT_SIZE_MAX - FONT_SIZE_MIN + 1 },
+  (_, index) => FONT_SIZE_MIN + index,
+)
 
 const imageForm = reactive({
   src: '',
@@ -115,6 +126,101 @@ const extractText = (rawHtml) => {
   return (temp.innerText || '').replaceAll('\u00A0', ' ')
 }
 
+const ROOT_BLOCK_TAGS = new Set([
+  'p',
+  'div',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'ul',
+  'ol',
+  'li',
+  'blockquote',
+  'pre',
+  'table',
+  'hr',
+])
+
+const normalizeRootParagraphs = (rawHtml) => {
+  const parser = new DOMParser()
+  const doc = parser.parseFromString(rawHtml, 'text/html')
+  const body = doc.body
+  const snapshot = Array.from(body.childNodes)
+  const inlineBuffer = []
+
+  const flushInlineBuffer = (beforeNode = null) => {
+    if (!inlineBuffer.length) {
+      return
+    }
+
+    const paragraph = doc.createElement('div')
+    let hasVisibleContent = false
+
+    for (const node of inlineBuffer) {
+      if (!node.parentNode || node.parentNode !== body) {
+        continue
+      }
+      if (node.nodeType === Node.TEXT_NODE) {
+        if ((node.nodeValue || '').replaceAll('\u00A0', ' ').trim()) {
+          hasVisibleContent = true
+        }
+      } else if (
+        node.nodeType === Node.ELEMENT_NODE &&
+        node.tagName.toLowerCase() !== 'br'
+      ) {
+        hasVisibleContent = true
+      }
+      paragraph.appendChild(node)
+    }
+
+    if (!hasVisibleContent) {
+      paragraph.innerHTML = '<br>'
+    }
+
+    if (beforeNode && beforeNode.parentNode === body) {
+      body.insertBefore(paragraph, beforeNode)
+    } else {
+      body.appendChild(paragraph)
+    }
+
+    inlineBuffer.length = 0
+  }
+
+  for (const node of snapshot) {
+    if (!node.parentNode || node.parentNode !== body) {
+      continue
+    }
+
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (!(node.nodeValue || '').replaceAll('\u00A0', ' ').trim()) {
+        node.remove()
+        continue
+      }
+      inlineBuffer.push(node)
+      continue
+    }
+
+    if (node.nodeType !== Node.ELEMENT_NODE) {
+      node.remove()
+      continue
+    }
+
+    const tag = node.tagName.toLowerCase()
+    if (ROOT_BLOCK_TAGS.has(tag)) {
+      flushInlineBuffer(node)
+      continue
+    }
+
+    inlineBuffer.push(node)
+  }
+
+  flushInlineBuffer()
+  return body.innerHTML
+}
+
 const isSafeHref = (href) =>
   /^(https?:|mailto:|tel:|\/|#)/i.test(href.trim())
 
@@ -137,6 +243,29 @@ const normalizeImageDimension = (value) => {
     return ''
   }
   return String(parsed)
+}
+
+const clampFontSize = (value) => {
+  if (!Number.isFinite(value)) {
+    return null
+  }
+  const rounded = Math.round(value)
+  if (rounded < FONT_SIZE_MIN || rounded > FONT_SIZE_MAX) {
+    return null
+  }
+  return rounded
+}
+
+const extractFontSizeFromStyle = (styleText) => {
+  if (!styleText) {
+    return null
+  }
+  const match = String(styleText).match(/font-size\s*:\s*([0-9]+(?:\.[0-9]+)?)px/i)
+  if (!match) {
+    return null
+  }
+  const parsed = Number.parseFloat(match[1])
+  return clampFontSize(parsed)
 }
 
 const sanitizeHtml = (rawHtml) => {
@@ -165,6 +294,15 @@ const sanitizeHtml = (rawHtml) => {
       }
       if (node.getAttribute('target') === '_blank') {
         node.setAttribute('rel', 'noopener noreferrer')
+      }
+    }
+
+    if (tag === 'span') {
+      const fontSize = extractFontSizeFromStyle(node.getAttribute('style'))
+      if (fontSize) {
+        node.setAttribute('style', `font-size: ${fontSize}px;`)
+      } else {
+        node.removeAttribute('style')
       }
     }
 
@@ -205,11 +343,12 @@ const sanitizeHtml = (rawHtml) => {
 
 const cleanEditorHtml = (rawHtml) => {
   const safe = sanitizeHtml(rawHtml)
-  const plain = extractText(safe).trim()
+  const normalized = normalizeRootParagraphs(safe)
+  const plain = extractText(normalized).trim()
   const temp = document.createElement('div')
-  temp.innerHTML = safe
+  temp.innerHTML = normalized
   const hasImage = !!temp.querySelector('img')
-  return plain || hasImage ? safe : ''
+  return plain || hasImage ? normalized : ''
 }
 
 const syncEditorFromModel = () => {
@@ -225,6 +364,7 @@ const syncModelFromEditor = () => {
   if (!editor.value) {
     return
   }
+  stripFontSizeMarkers()
   contentHtml.value = cleanEditorHtml(editor.value.innerHTML)
 }
 
@@ -659,6 +799,165 @@ const queryStateSafe = (command) => {
   } catch {
     return false
   }
+}
+
+const parseFontSizeInput = (rawValue) => {
+  if (rawValue === '' || rawValue === 'default' || rawValue === null) {
+    return null
+  }
+  const parsed = Number.parseInt(String(rawValue), 10)
+  return clampFontSize(parsed)
+}
+
+const getInlineFontSizeFromNode = (node) => {
+  if (!node || !editor.value) {
+    return ''
+  }
+  let current =
+    node.nodeType === Node.TEXT_NODE
+      ? node.parentElement
+      : node instanceof Element
+        ? node
+        : null
+
+  while (current && current !== editor.value) {
+    const explicitSize = extractFontSizeFromStyle(current.getAttribute('style'))
+    if (explicitSize) {
+      return String(explicitSize)
+    }
+    current = current.parentElement
+  }
+
+  return ''
+}
+
+const stripFontSizeMarkers = () => {
+  if (!editor.value) {
+    return
+  }
+
+  const walker = document.createTreeWalker(editor.value, NodeFilter.SHOW_TEXT)
+  const textNodes = []
+  let node = walker.nextNode()
+  while (node) {
+    if (node.nodeValue?.includes(FONT_SIZE_MARKER)) {
+      textNodes.push(node)
+    }
+    node = walker.nextNode()
+  }
+
+  for (const textNode of textNodes) {
+    textNode.nodeValue = textNode.nodeValue.replaceAll(FONT_SIZE_MARKER, '')
+  }
+}
+
+const wrapTextNodesInFragmentWithFontSize = (fragment, fontSizePx) => {
+  const walker = document.createTreeWalker(fragment, NodeFilter.SHOW_TEXT)
+  const textNodes = []
+  let node = walker.nextNode()
+  while (node) {
+    if (node.nodeValue && node.nodeValue.length) {
+      textNodes.push(node)
+    }
+    node = walker.nextNode()
+  }
+
+  for (const textNode of textNodes) {
+    if (!textNode.parentNode) {
+      continue
+    }
+    const wrapper = document.createElement('span')
+    wrapper.setAttribute('style', `font-size: ${fontSizePx}px;`)
+    textNode.parentNode.insertBefore(wrapper, textNode)
+    wrapper.appendChild(textNode)
+  }
+}
+
+const clearFontSizeStylesInFragment = (fragment) => {
+  const elements = Array.from(fragment.querySelectorAll('*'))
+  for (const element of elements) {
+    if (!(element instanceof HTMLElement)) {
+      continue
+    }
+    if (element.style.fontSize) {
+      element.style.removeProperty('font-size')
+      if (!element.getAttribute('style')?.trim()) {
+        element.removeAttribute('style')
+      }
+    }
+  }
+}
+
+const setFontSizeAtSelection = (rawValue) => {
+  if (selectedTableCells.value.length && !editingTableCell.value) {
+    return
+  }
+
+  const parsed = parseFontSizeInput(rawValue)
+  const targetSize = parsed ?? DEFAULT_FONT_SIZE
+
+  focusEditor()
+  const selection = window.getSelection()
+  if (!selection) {
+    return
+  }
+  let range = null
+  if (selection.rangeCount && isNodeInEditor(selection.anchorNode)) {
+    range = selection.getRangeAt(0)
+  } else if (fontSizeRange.value) {
+    range = fontSizeRange.value.cloneRange()
+    selection.removeAllRanges()
+    selection.addRange(range)
+  }
+  if (!range || !isNodeInEditor(range.commonAncestorContainer)) {
+    return
+  }
+
+  if (range.collapsed) {
+    const typingSpan = document.createElement('span')
+    typingSpan.setAttribute('style', `font-size: ${targetSize}px;`)
+    const marker = document.createTextNode(FONT_SIZE_MARKER)
+    typingSpan.appendChild(marker)
+    range.insertNode(typingSpan)
+
+    const caretRange = document.createRange()
+    caretRange.setStart(marker, marker.nodeValue.length)
+    caretRange.collapse(true)
+    selection.removeAllRanges()
+    selection.addRange(caretRange)
+
+    currentFontSize.value = String(targetSize)
+    fontSizeRange.value = caretRange.cloneRange()
+    updateActiveTools()
+    return
+  }
+
+  const fragment = range.extractContents()
+  if (parsed === null) {
+    clearFontSizeStylesInFragment(fragment)
+  } else {
+    wrapTextNodesInFragmentWithFontSize(fragment, targetSize)
+  }
+
+  const marker = document.createTextNode(FONT_SIZE_MARKER)
+  fragment.appendChild(marker)
+  range.insertNode(fragment)
+
+  const caretRange = document.createRange()
+  caretRange.setStartAfter(marker)
+  caretRange.collapse(true)
+  selection.removeAllRanges()
+  selection.addRange(caretRange)
+  marker.remove()
+
+  stripFontSizeMarkers()
+  fontSizeRange.value = caretRange.cloneRange()
+  syncModelFromEditor()
+  updateActiveTools()
+}
+
+const onFontSizeChange = (value) => {
+  setFontSizeAtSelection(value)
 }
 
 const findAncestorByTag = (node, tagNames) => {
@@ -1332,6 +1631,12 @@ const updateActiveTools = () => {
     }
   }
 
+  const detectedFontSize =
+    node && !selectedImageNode && !selectedCell
+      ? getInlineFontSizeFromNode(node)
+      : ''
+  currentFontSize.value = detectedFontSize || String(DEFAULT_FONT_SIZE)
+
   if (!node && !selectedCell && !selectedImageNode && !showImagePanel.value) {
     activeToolKeys.value = []
     return
@@ -1422,6 +1727,7 @@ const onEditorInput = () => {
   if (!selectedImage.value) {
     imageInsertRange.value = getCurrentEditorRange()
   }
+  fontSizeRange.value = getCurrentEditorRange()
   syncModelFromEditor()
   updateMentionFromSelection()
   updateActiveTools()
@@ -1431,6 +1737,7 @@ const onEditorCaretChange = () => {
   if (!selectedImage.value) {
     imageInsertRange.value = getCurrentEditorRange()
   }
+  fontSizeRange.value = getCurrentEditorRange()
   updateMentionFromSelection()
   updateActiveTools()
 }
@@ -1675,6 +1982,10 @@ const onDocumentPointerDown = (event) => {
 }
 
 const onSelectionChange = () => {
+  const range = getCurrentEditorRange()
+  if (range) {
+    fontSizeRange.value = range
+  }
   updateActiveTools()
 }
 
@@ -1853,6 +2164,7 @@ const handleAction = (action, contextOverride = null) => {
       closeImagePanel()
       resetImageForm()
       imageInsertRange.value = null
+      fontSizeRange.value = null
       contentHtml.value = ''
       nextTick(() => {
         syncEditorFromModel()
@@ -1874,7 +2186,13 @@ const handleAction = (action, contextOverride = null) => {
 
 <template>
   <main class="workspace">
-    <EditorToolbar :active-tools="activeToolKeys" @action="handleAction" />
+    <EditorToolbar
+      :active-tools="activeToolKeys"
+      :current-font-size="currentFontSize"
+      :font-size-options="fontSizeOptions"
+      @action="handleAction"
+      @font-size-change="onFontSizeChange"
+    />
     <input ref="imageFileInput" class="image-file-input" type="file" accept="image/*" @change="onImageFileChange" />
 <!-- 
     <section v-if="showImagePanel" class="image-panel" aria-label="Image settings">
@@ -2039,7 +2357,7 @@ const handleAction = (action, contextOverride = null) => {
   min-height: 320px;
   padding: 0.95rem 1rem;
   outline: none;
-  font-size: 1rem;
+  font-size: 12px;
   line-height: 1.6;
   color: var(--editor-ink);
   overflow-y: auto;
@@ -2059,6 +2377,8 @@ const handleAction = (action, contextOverride = null) => {
 .editor-input :deep(h5) {
   margin: 0.5rem 0 0.7rem;
   color: #0b3b35;
+  font-size: inherit;
+  line-height: inherit;
 }
 
 .editor-input :deep(blockquote) {

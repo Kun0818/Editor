@@ -1,10 +1,9 @@
 <script setup>
 import {
   Bold,
-  Columns2,
-  Columns3,
   Download,
   Eraser,
+  Grid3x3,
   Heading1,
   Heading2,
   Heading3,
@@ -14,11 +13,6 @@ import {
   Italic,
   List,
   Underline,
-  Rows2,
-  Rows3,
-  Grid3x3 ,
-  TableCellsMerge,
-  TableCellsSplit,
 } from '@lucide/vue'
 
 const props = defineProps({
@@ -26,28 +20,30 @@ const props = defineProps({
     type: Array,
     default: () => [],
   },
+  currentFontSize: {
+    type: String,
+    default: '12',
+  },
+  fontSizeOptions: {
+    type: Array,
+    default: () => [],
+  },
 })
 
-const emit = defineEmits(['action'])
+const emit = defineEmits(['action', 'font-size-change'])
 
 const tools = [
-  { key: 'heading1', label: 'Heading 1', title: 'Format as heading 1', icon: Heading1 },
-  { key: 'heading2', label: 'Heading 2', title: 'Format as heading 2', icon: Heading2 },
-  { key: 'heading3', label: 'Heading 3', title: 'Format as heading 3', icon: Heading3 },
-  { key: 'heading4', label: 'Heading 4', title: 'Format as heading 4', icon: Heading4 },
-  { key: 'heading5', label: 'Heading 5', title: 'Format as heading 5', icon: Heading5 },
+  // { key: 'heading1', label: 'Heading 1', title: 'Format as heading 1', icon: Heading1 },
+  // { key: 'heading2', label: 'Heading 2', title: 'Format as heading 2', icon: Heading2 },
+  // { key: 'heading3', label: 'Heading 3', title: 'Format as heading 3', icon: Heading3 },
+  // { key: 'heading4', label: 'Heading 4', title: 'Format as heading 4', icon: Heading4 },
+  // { key: 'heading5', label: 'Heading 5', title: 'Format as heading 5', icon: Heading5 },
   { key: 'bold', label: 'Bold', title: 'Bold text', icon: Bold },
   { key: 'italic', label: 'Italic', title: 'Italic text', icon: Italic },
   { key: 'underline', label: 'Underline', title: 'Underline text', icon: Underline },
   { key: 'list', label: 'List', title: 'Bullet list', icon: List },
   { key: 'image', label: 'Image', title: 'Insert or edit image', icon: Image },
-  { key: 'table', label: 'Table', title: 'Insert a 3x3 table', icon: Grid3x3  },
-  // { key: 'tableMerge', label: 'Merge Cells', title: 'Merge selected table cells', icon: TableCellsMerge },
-  // { key: 'tableUnmerge', label: 'Unmerge Cells', title: 'Split current merged cell', icon: TableCellsSplit },
-  // { key: 'tableAddRow', label: 'Add Row', title: 'Add a row below current row', icon: Rows3 },
-  // { key: 'tableAddCol', label: 'Add Column', title: 'Add a column to the right', icon: Columns3 },
-  // { key: 'tableDeleteRow', label: 'Delete Row', title: 'Delete current table row', icon: Rows2 },
-  // { key: 'tableDeleteCol', label: 'Delete Column', title: 'Delete current table column', icon: Columns2 },
+  { key: 'table', label: 'Table', title: 'Insert a 3x3 table', icon: Grid3x3 },
 ]
 
 const utilityTools = [
@@ -58,33 +54,28 @@ const utilityTools = [
 
 <template>
   <div class="toolbar" role="toolbar" aria-label="Editor formatting">
+
+
+
     <div class="tools">
-      <button
-        v-for="tool in tools"
-        :key="tool.key"
-        type="button"
-        class="tool"
-        :class="{ active: props.activeTools.includes(tool.key) }"
-        :title="tool.title"
-        :aria-label="tool.label"
-        @mousedown.prevent
-        @click="emit('action', tool.key)"
-      >
+      <label class="size-control" aria-label="Font size">
+        <select class="size-select" :value="props.currentFontSize" title="Font size" @mousedown.stop
+          @change="emit('font-size-change', $event.target.value)">
+          <option v-for="size in props.fontSizeOptions" :key="size" :value="String(size)">
+            {{ size }}px
+          </option>
+        </select>
+      </label>
+      <button v-for="tool in tools" :key="tool.key" type="button" class="tool"
+        :class="{ active: props.activeTools.includes(tool.key) }" :title="tool.title" :aria-label="tool.label"
+        @mousedown.prevent @click="emit('action', tool.key)">
         <component :is="tool.icon" class="tool-icon" :size="16" :stroke-width="1.9" aria-hidden="true" />
       </button>
     </div>
 
     <div class="utility-tools">
-      <button
-        v-for="tool in utilityTools"
-        :key="tool.key"
-        type="button"
-        class="tool utility"
-        :title="tool.title"
-        :aria-label="tool.label"
-        @mousedown.prevent
-        @click="emit('action', tool.key)"
-      >
+      <button v-for="tool in utilityTools" :key="tool.key" type="button" class="tool utility" :title="tool.title"
+        :aria-label="tool.label" @mousedown.prevent @click="emit('action', tool.key)">
         <component :is="tool.icon" class="tool-icon" :size="16" :stroke-width="1.9" aria-hidden="true" />
       </button>
     </div>
@@ -104,6 +95,29 @@ const utilityTools = [
   border-top-left-radius: 0.5rem;
   border-top-right-radius: 0.5rem;
   background: #ffffff;
+}
+
+.size-control {
+  display: inline-flex;
+  align-items: center;
+}
+
+.size-select {
+  min-width: 6.8rem;
+  height: 2.2rem;
+  border: 1px solid var(--editor-border);
+  border-radius: 0.6rem;
+  background: #ffffff;
+  color: var(--editor-ink);
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0 0.55rem;
+  outline: none;
+}
+
+.size-select:focus-visible {
+  border-color: #0f766e;
+  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.16);
 }
 
 .tools,
