@@ -4,6 +4,7 @@ import {
   AlignLeft,
   AlignRight,
   Bold,
+  ChevronDown,
   Download,
   Eraser,
   Grid3x3,
@@ -19,6 +20,7 @@ import {
   Link2,
   Underline,
 } from '@lucide/vue'
+import ColorPickerPopover from './ColorPickerPopover.vue'
 
 const props = defineProps({
   activeTools: {
@@ -33,9 +35,30 @@ const props = defineProps({
     type: Array,
     default: () => [],
   },
+  currentTextColor: {
+    type: String,
+    default: '',
+  },
+  textColorOptions: {
+    type: Array,
+    default: () => [],
+  },
+  currentHighlightColor: {
+    type: String,
+    default: '',
+  },
+  highlightColorOptions: {
+    type: Array,
+    default: () => [],
+  },
 })
 
-const emit = defineEmits(['action', 'font-size-change'])
+const emit = defineEmits([
+  'action',
+  'font-size-change',
+  'text-color-change',
+  'highlight-color-change',
+])
 
 const tools = [
   // { key: 'heading1', label: 'Heading 1', title: 'Format as heading 1', icon: Heading1 },
@@ -76,6 +99,40 @@ const utilityTools = [
           </option>
         </select>
       </label>
+      <ColorPickerPopover
+        :model-value="props.currentTextColor"
+        :colors="props.textColorOptions"
+        title="字型色彩"
+        clear-label="清除顏色"
+        more-label="更多色彩..."
+        @select="emit('text-color-change', $event)"
+      >
+        <template #trigger="{ open, selectedColor }">
+          <span class="color-trigger-content">
+            <span class="trigger-letter">A</span>
+            <span class="trigger-underline" :style="{ backgroundColor: selectedColor || '#111827' }"></span>
+            <ChevronDown class="trigger-chevron" :class="{ open }" :size="14" :stroke-width="2" aria-hidden="true" />
+          </span>
+        </template>
+      </ColorPickerPopover>
+
+      <ColorPickerPopover
+        :model-value="props.currentHighlightColor"
+        :colors="props.highlightColorOptions"
+        title="醒目提示色"
+        clear-label="清除醒目色"
+        more-label="更多色彩..."
+        @select="emit('highlight-color-change', $event)"
+      >
+        <template #trigger="{ open, selectedColor }">
+          <span class="color-trigger-content highlight">
+            <span class="trigger-letter">H</span>
+            <span class="trigger-underline highlight-line"
+              :style="{ backgroundColor: selectedColor || 'transparent' }"></span>
+            <ChevronDown class="trigger-chevron" :class="{ open }" :size="14" :stroke-width="2" aria-hidden="true" />
+          </span>
+        </template>
+      </ColorPickerPopover>
       <button v-for="tool in tools" :key="tool.key" type="button" class="tool"
         :class="{ active: props.activeTools.includes(tool.key) }" :title="tool.title" :aria-label="tool.label"
         @mousedown.prevent @click="emit('action', tool.key)">
@@ -128,6 +185,36 @@ const utilityTools = [
 .size-select:focus-visible {
   border-color: #0f766e;
   box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.16);
+}
+
+.color-trigger-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.26rem;
+}
+
+.trigger-letter {
+  font-size: 0.98rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.trigger-underline {
+  width: 0.95rem;
+  height: 2px;
+  border-radius: 999px;
+}
+
+.highlight-line {
+  border: 1px solid rgba(15, 23, 42, 0.18);
+}
+
+.trigger-chevron {
+  transition: transform 140ms ease;
+}
+
+.trigger-chevron.open {
+  transform: rotate(180deg);
 }
 
 .tools,

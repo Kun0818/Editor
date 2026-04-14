@@ -93,6 +93,8 @@ const linkPopoverAnchor = ref(null)
 const linkInputRef = ref(null)
 const activeToolKeys = ref([])
 const currentFontSize = ref('12')
+const currentTextColor = ref('')
+const currentHighlightColor = ref('')
 const fontSizeRange = ref(null)
 const imageFileInput = ref(null)
 const showImagePanel = ref(false)
@@ -114,6 +116,9 @@ const imageAlignOptions = ['left', 'center', 'right']
 const FONT_SIZE_MIN = 8
 const FONT_SIZE_MAX = 40
 const DEFAULT_FONT_SIZE = 12
+const DEFAULT_TEXT_COLOR = '#1c2b38'
+const TRANSPARENT_HIGHLIGHT = 'transparent'
+const CLEAR_HIGHLIGHT_COLOR = '#ffffff'
 const DEFAULT_TEXT_ALIGN = 'left'
 const FONT_SIZE_MARKER = '\u200B'
 const TEXT_ALIGN_VALUES = ['left', 'center', 'right']
@@ -135,6 +140,23 @@ const fontSizeOptions = Array.from(
   { length: FONT_SIZE_MAX - FONT_SIZE_MIN + 1 },
   (_, index) => FONT_SIZE_MIN + index,
 )
+const textColorOptions = [
+  { label: 'Black', value: '#111827' },
+  { label: 'Gray', value: '#6b7280' },
+  { label: 'Red', value: '#dc2626' },
+  { label: 'Orange', value: '#ea580c' },
+  { label: 'Yellow', value: '#ca8a04' },
+  { label: 'Green', value: '#16a34a' },
+  { label: 'Blue', value: '#2563eb' },
+  { label: 'Purple', value: '#7c3aed' },
+]
+const highlightColorOptions = [
+  { label: 'Yellow', value: '#fde047' },
+  { label: 'Green', value: '#86efac' },
+  { label: 'Blue', value: '#93c5fd' },
+  { label: 'Pink', value: '#f9a8d4' },
+  { label: 'Orange', value: '#fdba74' },
+]
 
 const imageForm = reactive({
   src: '',
@@ -335,11 +357,100 @@ const extractTextAlignFromStyle = (styleText) => {
   return TEXT_ALIGN_VALUES.includes(align) ? align : null
 }
 
+const normalizeHexColor = (value) => {
+  const color = String(value || '').trim().toLowerCase()
+  if (/^#[0-9a-f]{6}$/.test(color)) {
+    return color
+  }
+  if (/^#[0-9a-f]{3}$/.test(color)) {
+    return `#${color[1]}${color[1]}${color[2]}${color[2]}${color[3]}${color[3]}`
+  }
+  return ''
+}
+
+const normalizeCssColor = (rawValue) => {
+  if (typeof rawValue !== 'string') {
+    return ''
+  }
+  const color = rawValue.trim()
+  if (!color) {
+    return ''
+  }
+
+  const hex = normalizeHexColor(color)
+  if (hex) {
+    return hex
+  }
+
+  const probe = document.createElement('span')
+  probe.style.color = ''
+  probe.style.color = color
+  if (!probe.style.color) {
+    return ''
+  }
+
+  const normalized = probe.style.color.trim().toLowerCase()
+  const normalizedHex = normalizeHexColor(normalized)
+  if (normalizedHex) {
+    return normalizedHex
+  }
+
+  const rgbMatch = normalized.match(
+    /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*([0-9]*\.?[0-9]+))?\s*\)$/i,
+  )
+  if (rgbMatch) {
+    const r = Math.min(255, Number.parseInt(rgbMatch[1], 10))
+    const g = Math.min(255, Number.parseInt(rgbMatch[2], 10))
+    const b = Math.min(255, Number.parseInt(rgbMatch[3], 10))
+    const alphaRaw = rgbMatch[4]
+    if (alphaRaw !== undefined && Number.parseFloat(alphaRaw) <= 0) {
+      return TRANSPARENT_HIGHLIGHT
+    }
+    const toHex = (channel) => channel.toString(16).padStart(2, '0')
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`
+  }
+
+  return normalized
+}
+
+const isClearHighlightColor = (value) => {
+  const normalized = normalizeCssColor(value)
+  return (
+    !normalized ||
+    normalized === TRANSPARENT_HIGHLIGHT ||
+    normalized === CLEAR_HIGHLIGHT_COLOR
+  )
+}
+
+const extractColorFromStyle = (styleText) => {
+  if (!styleText) {
+    return ''
+  }
+  const match = String(styleText).match(/(?:^|;)\s*color\s*:\s*([^;]+)/i)
+  if (!match) {
+    return ''
+  }
+  return normalizeCssColor(match[1])
+}
+
+const extractHighlightFromStyle = (styleText) => {
+  if (!styleText) {
+    return ''
+  }
+  const match = String(styleText).match(/(?:^|;)\s*background-color\s*:\s*([^;]+)/i)
+  if (!match) {
+    return ''
+  }
+  return normalizeCssColor(match[1])
+}
+
 const normalizeSanitizedStyle = (
   styleText,
   {
     allowFontSize = false,
     allowTextAlign = false,
+    allowColor = false,
+    allowHighlight = false,
     fallbackTextAlign = null,
   } = {},
 ) => {
@@ -358,6 +469,18 @@ const normalizeSanitizedStyle = (
     const fontSize = extractFontSizeFromStyle(styleText)
     if (fontSize) {
       parts.push(`font-size: ${fontSize}px;`)
+    }
+  }
+  if (allowColor) {
+    const color = extractColorFromStyle(styleText)
+    if (color) {
+      parts.push(`color: ${color};`)
+    }
+  }
+  if (allowHighlight) {
+    const highlight = extractHighlightFromStyle(styleText)
+    if (highlight) {
+      parts.push(`background-color: ${highlight};`)
     }
   }
   return parts.join(' ')
@@ -399,6 +522,8 @@ const sanitizeHtml = (rawHtml) => {
     if (tag === 'span') {
       const style = normalizeSanitizedStyle(node.getAttribute('style'), {
         allowFontSize: true,
+        allowColor: true,
+        allowHighlight: true,
       })
       if (style) {
         node.setAttribute('style', style)
@@ -411,6 +536,8 @@ const sanitizeHtml = (rawHtml) => {
       const style = normalizeSanitizedStyle(node.getAttribute('style'), {
         allowFontSize: true,
         allowTextAlign: true,
+        allowColor: true,
+        allowHighlight: true,
         fallbackTextAlign: legacyAlign,
       })
       if (style) {
@@ -1414,6 +1541,51 @@ const getInlineFontSizeFromNode = (node) => {
   return ''
 }
 
+const getInlineStyleValueFromNode = (node, extractor) => {
+  if (!node || !editor.value) {
+    return ''
+  }
+
+  let current =
+    node.nodeType === Node.TEXT_NODE
+      ? node.parentElement
+      : node instanceof Element
+        ? node
+        : null
+
+  while (current && current !== editor.value) {
+    const value = extractor(current.getAttribute('style'))
+    if (value) {
+      return value
+    }
+    current = current.parentElement
+  }
+
+  return ''
+}
+
+const getInlineTextColorFromNode = (node) => {
+  const detected = getInlineStyleValueFromNode(node, extractColorFromStyle)
+  return detected === DEFAULT_TEXT_COLOR ? '' : detected
+}
+
+const getInlineHighlightFromNode = (node) =>
+  getInlineStyleValueFromNode(node, extractHighlightFromStyle)
+
+const setElementStyleProperty = (element, property, value) => {
+  if (!(element instanceof HTMLElement)) {
+    return
+  }
+  if (!value) {
+    element.style.removeProperty(property)
+  } else {
+    element.style.setProperty(property, value)
+  }
+  if (!element.getAttribute('style')?.trim()) {
+    element.removeAttribute('style')
+  }
+}
+
 const stripFontSizeMarkers = () => {
   if (!editor.value) {
     return
@@ -1456,6 +1628,28 @@ const wrapTextNodesInFragmentWithFontSize = (fragment, fontSizePx) => {
   }
 }
 
+const wrapTextNodesInFragmentWithStyle = (fragment, property, value) => {
+  const walker = document.createTreeWalker(fragment, NodeFilter.SHOW_TEXT)
+  const textNodes = []
+  let node = walker.nextNode()
+  while (node) {
+    if (node.nodeValue && node.nodeValue.length) {
+      textNodes.push(node)
+    }
+    node = walker.nextNode()
+  }
+
+  for (const textNode of textNodes) {
+    if (!textNode.parentNode) {
+      continue
+    }
+    const wrapper = document.createElement('span')
+    wrapper.style.setProperty(property, value)
+    textNode.parentNode.insertBefore(wrapper, textNode)
+    wrapper.appendChild(textNode)
+  }
+}
+
 const clearFontSizeStylesInFragment = (fragment) => {
   const elements = Array.from(fragment.querySelectorAll('*'))
   for (const element of elements) {
@@ -1481,6 +1675,21 @@ const clearDescendantFontSizeStyles = (root) => {
       descendant.style.removeProperty('font-size')
       if (!descendant.getAttribute('style')?.trim()) {
         descendant.removeAttribute('style')
+      }
+    }
+  }
+}
+
+const clearStylePropertyInFragment = (fragment, property) => {
+  const elements = Array.from(fragment.querySelectorAll('*'))
+  for (const element of elements) {
+    if (!(element instanceof HTMLElement)) {
+      continue
+    }
+    if (element.style.getPropertyValue(property)) {
+      element.style.removeProperty(property)
+      if (!element.getAttribute('style')?.trim()) {
+        element.removeAttribute('style')
       }
     }
   }
@@ -1523,12 +1732,9 @@ const applyFontSizeToListItems = (items, parsedSize) => {
     clearDescendantFontSizeStyles(item)
 
     if (parsedSize === null) {
-      item.style.removeProperty('font-size')
-      if (!item.getAttribute('style')?.trim()) {
-        item.removeAttribute('style')
-      }
+      setElementStyleProperty(item, 'font-size', '')
     } else {
-      item.setAttribute('style', `font-size: ${targetSize}px;`)
+      setElementStyleProperty(item, 'font-size', `${targetSize}px`)
     }
   }
 }
@@ -1540,12 +1746,9 @@ const applyFontSizeToTableCells = (cells, parsedSize) => {
       continue
     }
     if (parsedSize === null) {
-      cell.style.removeProperty('font-size')
-      if (!cell.getAttribute('style')?.trim()) {
-        cell.removeAttribute('style')
-      }
+      setElementStyleProperty(cell, 'font-size', '')
     } else {
-      cell.setAttribute('style', `font-size: ${targetSize}px;`)
+      setElementStyleProperty(cell, 'font-size', `${targetSize}px`)
     }
   }
 }
@@ -1634,6 +1837,132 @@ const setFontSizeAtSelection = (rawValue) => {
 
 const onFontSizeChange = (value) => {
   setFontSizeAtSelection(value)
+}
+
+const normalizeTextColorInput = (rawValue) => {
+  if (!rawValue || rawValue === 'default') {
+    return DEFAULT_TEXT_COLOR
+  }
+  const normalized = normalizeCssColor(String(rawValue))
+  if (!normalized) {
+    return DEFAULT_TEXT_COLOR
+  }
+  return normalized
+}
+
+const normalizeHighlightInput = (rawValue) => {
+  if (!rawValue || rawValue === 'none' || rawValue === TRANSPARENT_HIGHLIGHT) {
+    return CLEAR_HIGHLIGHT_COLOR
+  }
+  const normalized = normalizeCssColor(String(rawValue))
+  if (!normalized || normalized === TRANSPARENT_HIGHLIGHT) {
+    return CLEAR_HIGHLIGHT_COLOR
+  }
+  return normalized
+}
+
+const setInlineStyleAtSelection = (
+  property,
+  value,
+  { clearTypingValue = '' } = {},
+) => {
+  if (selectedTableCells.value.length && !editingTableCell.value) {
+    if (selectedTableCells.value.length > 1) {
+      return
+    }
+    const primaryCell = getPrimarySelectedTableCell()
+    if (!primaryCell) {
+      return
+    }
+    enterTableCellEditMode(primaryCell)
+  }
+
+  if (!editingTableCell.value) {
+    focusEditor()
+  }
+  const selection = window.getSelection()
+  if (!selection) {
+    return
+  }
+
+  let range = null
+  if (selection.rangeCount && isNodeInEditor(selection.anchorNode)) {
+    range = selection.getRangeAt(0)
+  } else if (fontSizeRange.value) {
+    range = fontSizeRange.value.cloneRange()
+    selection.removeAllRanges()
+    selection.addRange(range)
+  }
+
+  if (!range || !isNodeInEditor(range.commonAncestorContainer)) {
+    return
+  }
+
+  if (range.collapsed) {
+    const typingSpan = document.createElement('span')
+    const typingValue = value || clearTypingValue
+    if (typingValue) {
+      typingSpan.style.setProperty(property, typingValue)
+    }
+    const marker = document.createTextNode(FONT_SIZE_MARKER)
+    typingSpan.appendChild(marker)
+    range.insertNode(typingSpan)
+
+    const caretRange = document.createRange()
+    caretRange.setStart(marker, marker.nodeValue.length)
+    caretRange.collapse(true)
+    selection.removeAllRanges()
+    selection.addRange(caretRange)
+
+    fontSizeRange.value = caretRange.cloneRange()
+    updateActiveTools()
+    return
+  }
+
+  const fragment = range.extractContents()
+  if (value) {
+    wrapTextNodesInFragmentWithStyle(fragment, property, value)
+  } else {
+    clearStylePropertyInFragment(fragment, property)
+  }
+
+  const marker = document.createTextNode(FONT_SIZE_MARKER)
+  fragment.appendChild(marker)
+  range.insertNode(fragment)
+
+  const caretRange = document.createRange()
+  caretRange.setStartAfter(marker)
+  caretRange.collapse(true)
+  selection.removeAllRanges()
+  selection.addRange(caretRange)
+  marker.remove()
+
+  stripFontSizeMarkers()
+  fontSizeRange.value = caretRange.cloneRange()
+  syncModelFromEditor()
+  updateActiveTools()
+}
+
+const setTextColorAtSelection = (rawValue) => {
+  const color = normalizeTextColorInput(rawValue)
+  setInlineStyleAtSelection('color', color, {
+    clearTypingValue: DEFAULT_TEXT_COLOR,
+  })
+}
+
+const setHighlightAtSelection = (rawValue) => {
+  const highlight = normalizeHighlightInput(rawValue)
+  setInlineStyleAtSelection('background-color', highlight, {
+    clearTypingValue: CLEAR_HIGHLIGHT_COLOR,
+  })
+}
+
+const onTextColorChange = (value) => {
+  setTextColorAtSelection(value)
+}
+
+const onHighlightColorChange = (value) => {
+  setHighlightAtSelection(value)
 }
 
 const findAncestorByTag = (node, tagNames) => {
@@ -2349,6 +2678,22 @@ const updateActiveTools = () => {
         : ''
   currentFontSize.value = detectedFontSize || String(DEFAULT_FONT_SIZE)
 
+  const detectedTextColor = node && !selectedImageNode
+    ? getInlineTextColorFromNode(node)
+    : ''
+  currentTextColor.value = detectedTextColor
+
+  const detectedHighlight = node && !selectedImageNode
+    ? getInlineHighlightFromNode(node)
+    : ''
+  const normalizedHighlight = isClearHighlightColor(detectedHighlight)
+    ? ''
+    : detectedHighlight
+  currentHighlightColor.value = normalizedHighlight
+  if (normalizedHighlight) {
+    active.add('highlight')
+  }
+
   const detectedAlign =
     selectedImageAlign ||
     selectedCellAlign ||
@@ -2362,6 +2707,8 @@ const updateActiveTools = () => {
   }
 
   if (!node && !selectedCell && !selectedImageNode && !showImagePanel.value) {
+    currentTextColor.value = ''
+    currentHighlightColor.value = ''
     activeToolKeys.value = []
     return
   }
@@ -2720,6 +3067,18 @@ const onDocumentPointerDown = (event) => {
   }
 
   if (editingTableCell.value) {
+    const clickedEditorUi =
+      target instanceof Element &&
+      (
+        target.closest('.toolbar') ||
+        target.closest('.color-picker-popover') ||
+        target.closest('.link-popover') ||
+        target.closest('.mention-menu') ||
+        target.closest('.table-context-menu')
+      )
+    if (clickedEditorUi) {
+      return
+    }
     if (
       target instanceof Node &&
       editingTableCell.value.contains(target)
@@ -2963,8 +3322,14 @@ const handleAction = (action, contextOverride = null) => {
       :active-tools="activeToolKeys"
       :current-font-size="currentFontSize"
       :font-size-options="fontSizeOptions"
+      :current-text-color="currentTextColor"
+      :text-color-options="textColorOptions"
+      :current-highlight-color="currentHighlightColor"
+      :highlight-color-options="highlightColorOptions"
       @action="handleAction"
       @font-size-change="onFontSizeChange"
+      @text-color-change="onTextColorChange"
+      @highlight-color-change="onHighlightColorChange"
     />
     <input ref="imageFileInput" class="image-file-input" type="file" accept="image/*" @change="onImageFileChange" />
 <!-- 
