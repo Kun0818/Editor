@@ -676,14 +676,38 @@ const getClosestEditorImage = (node) => {
   return image
 }
 
+const getImageAlignValue = (image) => {
+  if (!image || !editor.value?.contains(image)) {
+    return 'center'
+  }
+  const align = (image.getAttribute('data-align') || 'center').toLowerCase()
+  return imageAlignOptions.includes(align) ? align : 'center'
+}
+
+const setSelectedImageAlign = (alignment) => {
+  if (!imageAlignOptions.includes(alignment)) {
+    return false
+  }
+
+  const image = selectedImage.value
+  if (!image || !editor.value?.contains(image)) {
+    return false
+  }
+
+  image.setAttribute('data-align', alignment)
+  imageForm.align = alignment
+  syncModelFromEditor()
+  updateActiveTools()
+  return true
+}
+
 const setImageFormFromElement = (image) => {
   imageForm.src = image.getAttribute('src') || ''
   imageForm.alt = image.getAttribute('alt') || ''
   imageForm.title = image.getAttribute('title') || ''
   imageForm.width = image.getAttribute('width') || ''
   imageForm.height = image.getAttribute('height') || ''
-  const align = (image.getAttribute('data-align') || 'center').toLowerCase()
-  imageForm.align = imageAlignOptions.includes(align) ? align : 'center'
+  imageForm.align = getImageAlignValue(image)
 }
 
 const selectImage = (image, { openPanel = false } = {}) => {
@@ -1086,6 +1110,10 @@ const applyTextAlignToElement = (element, alignment) => {
 
 const setTextAlignAtSelection = (alignment) => {
   if (!TEXT_ALIGN_VALUES.includes(alignment)) {
+    return
+  }
+
+  if (setSelectedImageAlign(alignment)) {
     return
   }
 
@@ -2294,6 +2322,9 @@ const updateActiveTools = () => {
   const selectedCellAlign = selectedCell
     ? extractTextAlignFromStyle(selectedCell.getAttribute('style'))
     : null
+  const selectedImageAlign = selectedImageNode
+    ? getImageAlignValue(selectedImageNode)
+    : null
   const listItemNode =
     node && node instanceof Node
       ? (
@@ -2319,6 +2350,7 @@ const updateActiveTools = () => {
   currentFontSize.value = detectedFontSize || String(DEFAULT_FONT_SIZE)
 
   const detectedAlign =
+    selectedImageAlign ||
     selectedCellAlign ||
     (node && !selectedImageNode ? getTextAlignFromNode(node) : DEFAULT_TEXT_ALIGN)
   if (detectedAlign === 'center') {
