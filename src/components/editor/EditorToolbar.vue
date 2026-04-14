@@ -16,6 +16,7 @@ import {
   Italic,
   List,
   ListOrdered,
+  Link2,
   Underline,
 } from '@lucide/vue'
 
@@ -50,6 +51,7 @@ const tools = [
   { key: 'alignRight', label: 'Align Right', title: 'Align right', icon: AlignRight },
   { key: 'list', label: 'List', title: 'Bullet list', icon: List },
   { key: 'orderedList', label: 'Ordered List', title: 'Numbered list', icon: ListOrdered },
+  { key: 'link', label: 'URL', title: 'Insert or edit URL', icon: Link2 },
   { key: 'image', label: 'Image', title: 'Insert or edit image', icon: Image },
   { key: 'table', label: 'Table', title: 'Insert a 3x3 table', icon: Grid3x3 },
 ]

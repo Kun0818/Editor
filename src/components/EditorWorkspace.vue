@@ -85,6 +85,12 @@ const mentionQuery = ref('')
 const mentionRange = ref(null)
 const mentionPosition = ref({ top: 0, left: 0 })
 const mentionActiveIndex = ref(0)
+const showLinkPopover = ref(false)
+const linkPopoverPosition = ref({ top: 0, left: 0 })
+const linkPopoverHref = ref('')
+const linkPopoverRange = ref(null)
+const linkPopoverAnchor = ref(null)
+const linkInputRef = ref(null)
 const activeToolKeys = ref([])
 const currentFontSize = ref('12')
 const fontSizeRange = ref(null)
@@ -251,6 +257,27 @@ const normalizeRootParagraphs = (rawHtml) => {
 
 const isSafeHref = (href) =>
   /^(https?:|mailto:|tel:|\/|#)/i.test(href.trim())
+
+const normalizeHrefInput = (rawHref) => {
+  if (typeof rawHref !== 'string') {
+    return ''
+  }
+
+  const href = rawHref.trim()
+  if (!href) {
+    return ''
+  }
+
+  if (isSafeHref(href)) {
+    return href
+  }
+
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(href)) {
+    return `mailto:${href}`
+  }
+
+  return `https://${href}`
+}
 
 const isSafeImageSrc = (src) =>
   /^(https?:|data:image\/|blob:|\/|\.\/|\.\.\/)/i.test(src.trim())
@@ -518,6 +545,10 @@ const mentionMenuStyle = computed(() => ({
   top: `${mentionPosition.value.top}px`,
   left: `${mentionPosition.value.left}px`,
 }))
+const linkPopoverStyle = computed(() => ({
+  top: `${linkPopoverPosition.value.top}px`,
+  left: `${linkPopoverPosition.value.left}px`,
+}))
 const tableContextMenuStyle = computed(() => ({
   top: `${tableContextPosition.value.top}px`,
   left: `${tableContextPosition.value.left}px`,
@@ -596,6 +627,13 @@ const closeMentionMenu = () => {
   mentionQuery.value = ''
   mentionRange.value = null
   mentionActiveIndex.value = 0
+}
+
+const closeLinkPopover = () => {
+  showLinkPopover.value = false
+  linkPopoverHref.value = ''
+  linkPopoverRange.value = null
+  linkPopoverAnchor.value = null
 }
 
 const closeTableContextMenu = () => {
@@ -928,6 +966,18 @@ const queryStateSafe = (command) => {
 const getElementFromNode = (node) =>
   node?.nodeType === Node.TEXT_NODE ? node.parentElement : node instanceof Element ? node : null
 
+const getClosestAnchorElement = (node) => {
+  const element = getElementFromNode(node)
+  if (!(element instanceof Element)) {
+    return null
+  }
+  const anchor = element.closest('a')
+  if (!anchor || !editor.value?.contains(anchor)) {
+    return null
+  }
+  return anchor
+}
+
 const getClosestAlignableBlock = (node) => {
   if (!node || !editor.value) {
     return null
@@ -1106,6 +1156,204 @@ const getTextAlignFromNode = (node) => {
   }
 
   return DEFAULT_TEXT_ALIGN
+}
+
+const unwrapAnchorElement = (anchor) => {
+  const parent = anchor.parentNode
+  if (!parent) {
+    return
+  }
+  while (anchor.firstChild) {
+    parent.insertBefore(anchor.firstChild, anchor)
+  }
+  anchor.remove()
+}
+
+const getLinkRangeForPopover = () => {
+  const selection = window.getSelection()
+  if (selection && selection.rangeCount && isNodeInEditor(selection.anchorNode)) {
+    return selection.getRangeAt(0).cloneRange()
+  }
+  if (fontSizeRange.value) {
+    return fontSizeRange.value.cloneRange()
+  }
+  return null
+}
+
+const getLinkContextFromRange = (range) => {
+  const startLink = getClosestAnchorElement(range.startContainer)
+  const endLink = getClosestAnchorElement(range.endContainer)
+  const sameLink = startLink && endLink && startLink === endLink ? startLink : null
+  const currentLink = sameLink || (range.collapsed ? startLink : null)
+  return { startLink, endLink, sameLink, currentLink }
+}
+
+const setLinkPopoverPosition = (range, currentLink = null) => {
+  const targetRect =
+    currentLink?.getBoundingClientRect?.() || range.getBoundingClientRect()
+  const rect =
+    targetRect && (targetRect.width || targetRect.height)
+      ? targetRect
+      : editor.value?.getBoundingClientRect()
+  if (!rect) {
+    return
+  }
+
+  const maxWidth = 380
+  const maxHeight = 200
+  linkPopoverPosition.value = {
+    left: Math.max(8, Math.min(rect.left, window.innerWidth - maxWidth - 8)),
+    top: Math.max(8, Math.min(rect.bottom + 8, window.innerHeight - maxHeight - 8)),
+  }
+}
+
+const openLinkPopover = () => {
+  if (selectedTableCells.value.length && !editingTableCell.value) {
+    return
+  }
+
+  closeMentionMenu()
+  closeTableContextMenu()
+  closeImagePanel()
+  focusEditor()
+
+  const range = getLinkRangeForPopover()
+  if (!range || !isNodeInEditor(range.commonAncestorContainer)) {
+    return
+  }
+
+  const { currentLink } = getLinkContextFromRange(range)
+  linkPopoverRange.value = range
+  linkPopoverAnchor.value = currentLink
+  linkPopoverHref.value = currentLink?.getAttribute('href') || ''
+  setLinkPopoverPosition(range, currentLink)
+  showLinkPopover.value = true
+  nextTick(() => {
+    linkInputRef.value?.focus()
+    linkInputRef.value?.select()
+  })
+}
+
+const removeLinkFromPopover = () => {
+  const selection = window.getSelection()
+  if (!selection) {
+    return
+  }
+
+  const range =
+    linkPopoverRange.value?.cloneRange() || getLinkRangeForPopover()
+  if (!range || !isNodeInEditor(range.commonAncestorContainer)) {
+    closeLinkPopover()
+    return
+  }
+
+  focusEditor()
+  selection.removeAllRanges()
+  selection.addRange(range)
+
+  const currentLink =
+    (linkPopoverAnchor.value && editor.value?.contains(linkPopoverAnchor.value)
+      ? linkPopoverAnchor.value
+      : null) || getLinkContextFromRange(range).currentLink
+
+  if (range.collapsed && currentLink) {
+    unwrapAnchorElement(currentLink)
+  } else {
+    document.execCommand('unlink', false, null)
+  }
+
+  fontSizeRange.value = getCurrentEditorRange()
+  closeLinkPopover()
+  syncModelFromEditor()
+  updateActiveTools()
+}
+
+const submitLinkPopover = () => {
+  const normalizedHref = normalizeHrefInput(linkPopoverHref.value)
+  if (!normalizedHref) {
+    removeLinkFromPopover()
+    return
+  }
+
+  const selection = window.getSelection()
+  if (!selection) {
+    return
+  }
+
+  const range =
+    linkPopoverRange.value?.cloneRange() || getLinkRangeForPopover()
+  if (!range || !isNodeInEditor(range.commonAncestorContainer)) {
+    closeLinkPopover()
+    return
+  }
+
+  focusEditor()
+  selection.removeAllRanges()
+  selection.addRange(range)
+
+  const currentLink =
+    (linkPopoverAnchor.value && editor.value?.contains(linkPopoverAnchor.value)
+      ? linkPopoverAnchor.value
+      : null) || getLinkContextFromRange(range).currentLink
+
+  if (range.collapsed) {
+    if (currentLink) {
+      currentLink.setAttribute('href', normalizedHref)
+      const caretRange = document.createRange()
+      caretRange.selectNodeContents(currentLink)
+      caretRange.collapse(false)
+      selection.removeAllRanges()
+      selection.addRange(caretRange)
+      fontSizeRange.value = caretRange.cloneRange()
+    } else {
+      const anchor = document.createElement('a')
+      anchor.setAttribute('href', normalizedHref)
+      anchor.textContent = normalizedHref
+      range.insertNode(anchor)
+      const spacer = document.createTextNode(' ')
+      anchor.after(spacer)
+
+      const caretRange = document.createRange()
+      caretRange.setStartAfter(spacer)
+      caretRange.collapse(true)
+      selection.removeAllRanges()
+      selection.addRange(caretRange)
+      fontSizeRange.value = caretRange.cloneRange()
+    }
+    closeLinkPopover()
+    syncModelFromEditor()
+    updateActiveTools()
+    return
+  }
+
+  document.execCommand('createLink', false, normalizedHref)
+  if (editor.value) {
+    const touchedLinks = Array.from(editor.value.querySelectorAll('a')).filter(
+      (anchor) => {
+        try {
+          return range.intersectsNode(anchor)
+        } catch {
+          return false
+        }
+      },
+    )
+    for (const anchor of touchedLinks) {
+      anchor.setAttribute('href', normalizedHref)
+    }
+  }
+
+  fontSizeRange.value = getCurrentEditorRange()
+  closeLinkPopover()
+  syncModelFromEditor()
+  updateActiveTools()
+}
+
+const onLinkPopoverKeydown = (event) => {
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeLinkPopover()
+    focusEditor()
+  }
 }
 
 const parseFontSizeInput = (rawValue) => {
@@ -1979,6 +2227,9 @@ const updateActiveTools = () => {
   if (showImagePanel.value) {
     active.add('image')
   }
+  if (showLinkPopover.value) {
+    active.add('link')
+  }
 
   const selection = window.getSelection()
   const node =
@@ -2001,6 +2252,9 @@ const updateActiveTools = () => {
     }
     if (queryStateSafe('insertOrderedList')) {
       active.add('orderedList')
+    }
+    if (getClosestAnchorElement(node)) {
+      active.add('link')
     }
 
     const headingNode = findAncestorByTag(node, ['H1', 'H2', 'H3', 'H4', 'H5'])
@@ -2287,7 +2541,22 @@ const onEditorDblClick = (event) => {
 }
 
 const onEditorKeydown = (event) => {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+    event.preventDefault()
+    if (showLinkPopover.value) {
+      closeLinkPopover()
+    } else {
+      openLinkPopover()
+    }
+    return
+  }
+
   if (event.key === 'Escape') {
+    if (showLinkPopover.value) {
+      event.preventDefault()
+      closeLinkPopover()
+      return
+    }
     if (showMentionMenu.value) {
       event.preventDefault()
       closeMentionMenu()
@@ -2378,6 +2647,16 @@ const onEditorKeydown = (event) => {
 
 const onDocumentPointerDown = (event) => {
   const target = event.target
+
+  if (showLinkPopover.value) {
+    const clickedInsidePopover =
+      target instanceof Element && target.closest('.link-popover')
+    const clickedToolbar =
+      target instanceof Element && target.closest('.toolbar')
+    if (!clickedInsidePopover && !clickedToolbar) {
+      closeLinkPopover()
+    }
+  }
 
   if (selectedImage.value) {
     const clickedImage = getClosestEditorImage(target)
@@ -2548,6 +2827,10 @@ const headingCommandMap = {
 }
 
 const handleAction = (action, contextOverride = null) => {
+  if (action !== 'link' && showLinkPopover.value) {
+    closeLinkPopover()
+  }
+
   if (headingCommandMap[action]) {
     runCommand('formatBlock', headingCommandMap[action])
     return
@@ -2578,6 +2861,13 @@ const handleAction = (action, contextOverride = null) => {
     case 'orderedList':
       runCommand('insertOrderedList')
       break
+    case 'link':
+      if (showLinkPopover.value) {
+        closeLinkPopover()
+      } else {
+        openLinkPopover()
+      }
+      break
     case 'image':
       imageInsertRange.value = getCurrentEditorRange() || imageInsertRange.value
       closeImagePanel()
@@ -2605,6 +2895,7 @@ const handleAction = (action, contextOverride = null) => {
       deleteCurrentTableColumn(contextOverride)
       break
     case 'clear':
+      closeLinkPopover()
       closeMentionMenu()
       closeTableContextMenu()
       stopTableDragSelection()
@@ -2718,6 +3009,25 @@ const handleAction = (action, contextOverride = null) => {
           </button>
         </li>
       </ul>
+
+      <div v-if="showLinkPopover" class="link-popover" :style="linkPopoverStyle" role="dialog" aria-label="Link settings"
+        @mousedown.stop>
+        <form class="link-form" @submit.prevent="submitLinkPopover">
+          <label class="link-field">
+            <span class="link-label">Link URL</span>
+            <input ref="linkInputRef" v-model="linkPopoverHref" class="link-input" type="text"
+              placeholder="https://example.com" @keydown="onLinkPopoverKeydown" />
+          </label>
+          <div class="link-actions">
+            <button type="submit" class="link-btn primary" @mousedown.prevent>
+              Apply
+            </button>
+            <button type="button" class="link-btn danger" @mousedown.prevent @click="removeLinkFromPopover">
+              Remove
+            </button>
+          </div>
+        </form>
+      </div>
 
       <ul v-if="showTableContextMenu" class="table-context-menu" :style="tableContextMenuStyle" role="menu"
         aria-label="Table quick actions">
@@ -3062,6 +3372,77 @@ const handleAction = (action, contextOverride = null) => {
   background: #f0fdfa;
   padding: 0.1rem 0.3rem;
   border-radius: 0.3rem;
+}
+
+.link-popover {
+  position: fixed;
+  z-index: 44;
+  width: min(340px, calc(100vw - 16px));
+  border: 1px solid var(--editor-border);
+  border-radius: 0.72rem;
+  background: #ffffff;
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.18);
+  padding: 0.56rem;
+}
+
+.link-form {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.link-field {
+  display: grid;
+  gap: 0.26rem;
+}
+
+.link-label {
+  font-size: 0.76rem;
+  color: var(--editor-muted);
+}
+
+.link-input {
+  width: 100%;
+  border: 1px solid var(--editor-border);
+  border-radius: 0.56rem;
+  background: #ffffff;
+  color: var(--editor-ink);
+  font-size: 0.84rem;
+  padding: 0.4rem 0.5rem;
+  outline: none;
+}
+
+.link-input:focus {
+  border-color: #0f766e;
+  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.14);
+}
+
+.link-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.42rem;
+}
+
+.link-btn {
+  border: 1px solid var(--editor-border);
+  border-radius: 0.52rem;
+  background: #ffffff;
+  color: var(--editor-ink);
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.3rem 0.62rem;
+  cursor: pointer;
+}
+
+.link-btn.primary {
+  background: #0f766e;
+  border-color: #0f766e;
+  color: #ffffff;
+}
+
+.link-btn.danger {
+  border-color: #fecaca;
+  background: #fff1f2;
+  color: #b91c1c;
 }
 
 .table-context-menu {
