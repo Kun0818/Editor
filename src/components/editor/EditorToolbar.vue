@@ -8,11 +8,6 @@ import {
   Download,
   Eraser,
   Grid3x3,
-  Heading1,
-  Heading2,
-  Heading3,
-  Heading4,
-  Heading5,
   Image,
   Italic,
   List,
@@ -51,6 +46,18 @@ const props = defineProps({
     type: Array,
     default: () => [],
   },
+  currentCellBackgroundColor: {
+    type: String,
+    default: '',
+  },
+  cellBackgroundOptions: {
+    type: Array,
+    default: () => [],
+  },
+  tableCellBackgroundEnabled: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 const emit = defineEmits([
@@ -58,14 +65,10 @@ const emit = defineEmits([
   'font-size-change',
   'text-color-change',
   'highlight-color-change',
+  'cell-background-change',
 ])
 
 const tools = [
-  // { key: 'heading1', label: 'Heading 1', title: 'Format as heading 1', icon: Heading1 },
-  // { key: 'heading2', label: 'Heading 2', title: 'Format as heading 2', icon: Heading2 },
-  // { key: 'heading3', label: 'Heading 3', title: 'Format as heading 3', icon: Heading3 },
-  // { key: 'heading4', label: 'Heading 4', title: 'Format as heading 4', icon: Heading4 },
-  // { key: 'heading5', label: 'Heading 5', title: 'Format as heading 5', icon: Heading5 },
   { key: 'bold', label: 'Bold', title: 'Bold text', icon: Bold },
   { key: 'italic', label: 'Italic', title: 'Italic text', icon: Italic },
   { key: 'underline', label: 'Underline', title: 'Underline text', icon: Underline },
@@ -87,24 +90,27 @@ const utilityTools = [
 
 <template>
   <div class="toolbar" role="toolbar" aria-label="Editor formatting">
-
-
-
     <div class="tools">
       <label class="size-control" aria-label="Font size">
-        <select class="size-select" :value="props.currentFontSize" title="Font size" @mousedown.stop
-          @change="emit('font-size-change', $event.target.value)">
+        <select
+          class="size-select"
+          :value="props.currentFontSize"
+          title="Font size"
+          @mousedown.stop
+          @change="emit('font-size-change', $event.target.value)"
+        >
           <option v-for="size in props.fontSizeOptions" :key="size" :value="String(size)">
             {{ size }}
           </option>
         </select>
       </label>
+
       <ColorPickerPopover
         :model-value="props.currentTextColor"
         :colors="props.textColorOptions"
-        title="字型色彩"
-        clear-label="清除顏色"
-        more-label="更多色彩..."
+        title="Text color"
+        clear-label="Clear color"
+        more-label="More colors..."
         @select="emit('text-color-change', $event)"
       >
         <template #trigger="{ open, selectedColor }">
@@ -119,30 +125,64 @@ const utilityTools = [
       <ColorPickerPopover
         :model-value="props.currentHighlightColor"
         :colors="props.highlightColorOptions"
-        title="醒目提示色"
-        clear-label="清除醒目色"
-        more-label="更多色彩..."
+        title="Highlight color"
+        clear-label="Clear highlight"
+        more-label="More colors..."
         @select="emit('highlight-color-change', $event)"
       >
         <template #trigger="{ open, selectedColor }">
           <span class="color-trigger-content highlight">
             <span class="trigger-letter">H</span>
-            <span class="trigger-underline highlight-line"
-              :style="{ backgroundColor: selectedColor || 'transparent' }"></span>
+            <span class="trigger-underline highlight-line" :style="{ backgroundColor: selectedColor || 'transparent' }"></span>
             <ChevronDown class="trigger-chevron" :class="{ open }" :size="14" :stroke-width="2" aria-hidden="true" />
           </span>
         </template>
       </ColorPickerPopover>
-      <button v-for="tool in tools" :key="tool.key" type="button" class="tool"
-        :class="{ active: props.activeTools.includes(tool.key) }" :title="tool.title" :aria-label="tool.label"
-        @mousedown.prevent @click="emit('action', tool.key)">
+
+      <ColorPickerPopover
+        :model-value="props.currentCellBackgroundColor"
+        :colors="props.cellBackgroundOptions"
+        :disabled="!props.tableCellBackgroundEnabled"
+        title="Cell background"
+        clear-label="Clear cell background"
+        more-label="More colors..."
+        @select="emit('cell-background-change', $event)"
+      >
+        <template #trigger="{ open, selectedColor }">
+          <span class="color-trigger-content">
+            <span class="trigger-letter">C</span>
+            <span class="trigger-underline cell-bg-line" :style="{ backgroundColor: selectedColor || 'transparent' }"></span>
+            <ChevronDown class="trigger-chevron" :class="{ open }" :size="14" :stroke-width="2" aria-hidden="true" />
+          </span>
+        </template>
+      </ColorPickerPopover>
+
+      <button
+        v-for="tool in tools"
+        :key="tool.key"
+        type="button"
+        class="tool"
+        :class="{ active: props.activeTools.includes(tool.key) }"
+        :title="tool.title"
+        :aria-label="tool.label"
+        @mousedown.prevent
+        @click="emit('action', tool.key)"
+      >
         <component :is="tool.icon" class="tool-icon" :size="16" :stroke-width="1.9" aria-hidden="true" />
       </button>
     </div>
 
     <div class="utility-tools">
-      <button v-for="tool in utilityTools" :key="tool.key" type="button" class="tool utility" :title="tool.title"
-        :aria-label="tool.label" @mousedown.prevent @click="emit('action', tool.key)">
+      <button
+        v-for="tool in utilityTools"
+        :key="tool.key"
+        type="button"
+        class="tool utility"
+        :title="tool.title"
+        :aria-label="tool.label"
+        @mousedown.prevent
+        @click="emit('action', tool.key)"
+      >
         <component :is="tool.icon" class="tool-icon" :size="16" :stroke-width="1.9" aria-hidden="true" />
       </button>
     </div>
@@ -157,8 +197,6 @@ const utilityTools = [
   justify-content: space-between;
   gap: 0.8rem;
   padding: 0.8rem;
-  /* border: 1px solid var(--editor-border); */
-  /* border-radius: 0.9rem; */
   border-top-left-radius: 0.5rem;
   border-top-right-radius: 0.5rem;
   background: #ffffff;
@@ -206,6 +244,12 @@ const utilityTools = [
 }
 
 .highlight-line {
+  border: 1px solid rgba(15, 23, 42, 0.18);
+}
+
+.cell-bg-line {
+  width: 0.95rem;
+  height: 0.54rem;
   border: 1px solid rgba(15, 23, 42, 0.18);
 }
 

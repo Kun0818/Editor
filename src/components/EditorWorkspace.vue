@@ -95,6 +95,8 @@ const activeToolKeys = ref([])
 const currentFontSize = ref('12')
 const currentTextColor = ref('')
 const currentHighlightColor = ref('')
+const currentCellBackgroundColor = ref('')
+const tableCellBackgroundEnabled = ref(false)
 const fontSizeRange = ref(null)
 const imageFileInput = ref(null)
 const showImagePanel = ref(false)
@@ -156,6 +158,16 @@ const highlightColorOptions = [
   { label: 'Blue', value: '#93c5fd' },
   { label: 'Pink', value: '#f9a8d4' },
   { label: 'Orange', value: '#fdba74' },
+]
+const cellBackgroundOptions = [
+  { label: 'Soft Yellow', value: '#fff2cc' },
+  { label: 'Soft Green', value: '#d9ead3' },
+  { label: 'Soft Blue', value: '#dbeafe' },
+  { label: 'Soft Pink', value: '#fce7f3' },
+  { label: 'Soft Orange', value: '#ffedd5' },
+  { label: 'Soft Purple', value: '#ede9fe' },
+  { label: 'Gray 1', value: '#f3f4f6' },
+  { label: 'Gray 2', value: '#e5e7eb' },
 ]
 
 const imageForm = reactive({
@@ -422,6 +434,11 @@ const isClearHighlightColor = (value) => {
   )
 }
 
+const isTransparentColor = (value) => {
+  const normalized = normalizeCssColor(value)
+  return !normalized || normalized === TRANSPARENT_HIGHLIGHT
+}
+
 const extractColorFromStyle = (styleText) => {
   if (!styleText) {
     return ''
@@ -451,6 +468,7 @@ const normalizeSanitizedStyle = (
     allowTextAlign = false,
     allowColor = false,
     allowHighlight = false,
+    allowCellBackground = false,
     fallbackTextAlign = null,
   } = {},
 ) => {
@@ -481,6 +499,12 @@ const normalizeSanitizedStyle = (
     const highlight = extractHighlightFromStyle(styleText)
     if (highlight) {
       parts.push(`background-color: ${highlight};`)
+    }
+  }
+  if (allowCellBackground) {
+    const background = extractHighlightFromStyle(styleText)
+    if (background && !isTransparentColor(background)) {
+      parts.push(`background-color: ${background};`)
     }
   }
   return parts.join(' ')
@@ -551,6 +575,7 @@ const sanitizeHtml = (rawHtml) => {
       const style = normalizeSanitizedStyle(node.getAttribute('style'), {
         allowFontSize: true,
         allowTextAlign: true,
+        allowCellBackground: true,
         fallbackTextAlign: legacyAlign,
       })
       if (style) {
@@ -1965,6 +1990,64 @@ const onHighlightColorChange = (value) => {
   setHighlightAtSelection(value)
 }
 
+const normalizeCellBackgroundInput = (rawValue) => {
+  if (!rawValue || rawValue === 'none' || rawValue === TRANSPARENT_HIGHLIGHT) {
+    return ''
+  }
+  const normalized = normalizeCssColor(String(rawValue))
+  if (!normalized || normalized === TRANSPARENT_HIGHLIGHT) {
+    return ''
+  }
+  return normalized
+}
+
+const getCellBackgroundColor = (cell) => {
+  if (!(cell instanceof HTMLElement)) {
+    return ''
+  }
+  const background = extractHighlightFromStyle(cell.getAttribute('style'))
+  return isTransparentColor(background) ? '' : background
+}
+
+const getTableCellsForBackgroundAction = () => {
+  const selected = selectedTableCells.value.filter((cell) =>
+    editor.value?.contains(cell),
+  )
+  if (selected.length) {
+    return selected
+  }
+
+  if (
+    editingTableCell.value &&
+    editor.value?.contains(editingTableCell.value)
+  ) {
+    return [editingTableCell.value]
+  }
+
+  const context = getCurrentTableContext()
+  return context ? [context.cell] : []
+}
+
+const setCellBackgroundAtSelection = (rawValue) => {
+  const background = normalizeCellBackgroundInput(rawValue)
+  const cells = getTableCellsForBackgroundAction()
+  if (!cells.length) {
+    return
+  }
+
+  for (const cell of cells) {
+    setElementStyleProperty(cell, 'background-color', background)
+  }
+
+  currentCellBackgroundColor.value = background
+  syncModelFromEditor()
+  updateActiveTools()
+}
+
+const onCellBackgroundColorChange = (value) => {
+  setCellBackgroundAtSelection(value)
+}
+
 const findAncestorByTag = (node, tagNames) => {
   if (!node || !editor.value) {
     return null
@@ -2624,7 +2707,9 @@ const updateActiveTools = () => {
   const inTable =
     !!selectedCell ||
     !!(node && findAncestorByTag(node, ['TABLE', 'THEAD', 'TBODY', 'TR', 'TH', 'TD']))
+  tableCellBackgroundEnabled.value = inTable
 
+  let tableContext = null
   if (inTable) {
     active.add('table')
     active.add('tableMerge')
@@ -2633,16 +2718,37 @@ const updateActiveTools = () => {
     active.add('tableDeleteRow')
     active.add('tableDeleteCol')
 
-    const context = selectedCell
+    tableContext = selectedCell
       ? getTableContextFromCell(selectedCell)
       : getCurrentTableContext()
-    if (context) {
-      const rowSpan = Math.max(1, Number.parseInt(context.cell.getAttribute('rowspan') || '1', 10))
-      const colSpan = Math.max(1, Number.parseInt(context.cell.getAttribute('colspan') || '1', 10))
+    if (tableContext) {
+      const rowSpan = Math.max(1, Number.parseInt(tableContext.cell.getAttribute('rowspan') || '1', 10))
+      const colSpan = Math.max(1, Number.parseInt(tableContext.cell.getAttribute('colspan') || '1', 10))
       if (rowSpan > 1 || colSpan > 1) {
         active.add('tableUnmerge')
       }
     }
+  }
+
+  const tableCellsForBackground = selectedTableCells.value.length
+    ? selectedTableCells.value.filter((cell) => editor.value?.contains(cell))
+    : tableContext?.cell
+      ? [tableContext.cell]
+      : []
+  if (tableCellsForBackground.length) {
+    const backgrounds = tableCellsForBackground.map((cell) =>
+      getCellBackgroundColor(cell),
+    )
+    const firstBackground = backgrounds[0] || ''
+    const sameBackground = backgrounds.every(
+      (color) => color === firstBackground,
+    )
+    currentCellBackgroundColor.value = sameBackground ? firstBackground : ''
+    if (currentCellBackgroundColor.value) {
+      active.add('cellBackground')
+    }
+  } else {
+    currentCellBackgroundColor.value = ''
   }
 
   const selectedCellSize = selectedCell
@@ -2709,6 +2815,8 @@ const updateActiveTools = () => {
   if (!node && !selectedCell && !selectedImageNode && !showImagePanel.value) {
     currentTextColor.value = ''
     currentHighlightColor.value = ''
+    currentCellBackgroundColor.value = ''
+    tableCellBackgroundEnabled.value = false
     activeToolKeys.value = []
     return
   }
@@ -3326,10 +3434,14 @@ const handleAction = (action, contextOverride = null) => {
       :text-color-options="textColorOptions"
       :current-highlight-color="currentHighlightColor"
       :highlight-color-options="highlightColorOptions"
+      :current-cell-background-color="currentCellBackgroundColor"
+      :cell-background-options="cellBackgroundOptions"
+      :table-cell-background-enabled="tableCellBackgroundEnabled"
       @action="handleAction"
       @font-size-change="onFontSizeChange"
       @text-color-change="onTextColorChange"
       @highlight-color-change="onHighlightColorChange"
+      @cell-background-change="onCellBackgroundColorChange"
     />
     <input ref="imageFileInput" class="image-file-input" type="file" accept="image/*" @change="onImageFileChange" />
 <!-- 

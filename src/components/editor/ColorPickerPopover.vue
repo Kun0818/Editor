@@ -12,15 +12,15 @@ const props = defineProps({
   },
   title: {
     type: String,
-    default: '字型色彩',
+    default: 'Color',
   },
   clearLabel: {
     type: String,
-    default: '清除顏色',
+    default: 'Clear color',
   },
   moreLabel: {
     type: String,
-    default: '更多色彩...',
+    default: 'More colors...',
   },
   showClear: {
     type: Boolean,
@@ -33,6 +33,10 @@ const props = defineProps({
   closeOnSelect: {
     type: Boolean,
     default: true,
+  },
+  disabled: {
+    type: Boolean,
+    default: false,
   },
 })
 
@@ -75,10 +79,16 @@ const closePanel = () => {
 }
 
 const openPanel = () => {
+  if (props.disabled) {
+    return
+  }
   isOpen.value = true
 }
 
 const togglePanel = () => {
+  if (props.disabled) {
+    return
+  }
   if (isOpen.value) {
     closePanel()
   } else {
@@ -93,6 +103,9 @@ const emitSelection = (value) => {
 }
 
 const onSelectColor = (value) => {
+  if (props.disabled) {
+    return
+  }
   emitSelection(value)
   if (props.closeOnSelect) {
     closePanel()
@@ -100,6 +113,9 @@ const onSelectColor = (value) => {
 }
 
 const onClearColor = () => {
+  if (props.disabled) {
+    return
+  }
   emitSelection('')
   if (props.closeOnSelect) {
     closePanel()
@@ -110,6 +126,9 @@ const isActiveColor = (value) =>
   normalizeColor(value) === selectedColor.value && !!selectedColor.value
 
 const openNativeColorPicker = () => {
+  if (props.disabled) {
+    return
+  }
   nativeColorInputRef.value?.click()
 }
 
@@ -156,6 +175,15 @@ watch(isOpen, (open) => {
   }
 })
 
+watch(
+  () => props.disabled,
+  (disabled) => {
+    if (disabled) {
+      closePanel()
+    }
+  },
+)
+
 onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', onDocumentPointerDown)
   document.removeEventListener('keydown', onDocumentKeydown)
@@ -164,7 +192,14 @@ onBeforeUnmount(() => {
 
 <template>
   <div ref="rootRef" class="color-picker-popover">
-    <button type="button" class="color-picker-trigger" :class="{ open: isOpen }" @mousedown.prevent @click.stop="togglePanel">
+    <button
+      type="button"
+      class="color-picker-trigger"
+      :class="{ open: isOpen, disabled: props.disabled }"
+      :disabled="props.disabled"
+      @mousedown.prevent
+      @click.stop="togglePanel"
+    >
       <slot name="trigger" :open="isOpen" :selected-color="selectedColor">
         <span class="fallback-trigger">
           <span class="fallback-swatch" :style="{ backgroundColor: selectedColor || '#ffffff' }"></span>
@@ -243,6 +278,13 @@ onBeforeUnmount(() => {
 .color-picker-trigger.open {
   border-color: var(--editor-brand);
   box-shadow: 0 8px 24px rgba(15, 118, 110, 0.14);
+}
+
+.color-picker-trigger.disabled {
+  opacity: 0.56;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
 }
 
 .fallback-trigger {
