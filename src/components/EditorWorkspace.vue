@@ -110,10 +110,18 @@ const tableRangeAnchor = ref(null)
 const tableRangeFocus = ref(null)
 const isTableDragging = ref(false)
 const editingTableCell = ref(null)
+const tableResizeHover = ref(null)
+const tableResizeGuide = ref({ visible: false, top: 0, left: 0, height: 0 })
+const isTableColumnResizing = ref(false)
+const tableColumnResizeState = ref(null)
 
 const TABLE_SELECTED_CLASS = 'table-cell-selected'
 const TABLE_EDITING_CLASS = 'table-cell-editing'
+const TABLE_RESIZE_HOT_CLASS = 'table-col-resize-hot'
 const IMAGE_SELECTED_CLASS = 'editor-image-selected'
+const TABLE_COL_RESIZE_HIT_AREA = 6
+const TABLE_COL_MIN_WIDTH = 56
+const TABLE_COL_MAX_WIDTH = 1400
 const imageAlignOptions = ['left', 'center', 'right']
 const FONT_SIZE_MIN = 8
 const FONT_SIZE_MAX = 40
@@ -369,6 +377,42 @@ const extractTextAlignFromStyle = (styleText) => {
   return TEXT_ALIGN_VALUES.includes(align) ? align : null
 }
 
+const normalizeStyleDimensionPx = (
+  rawValue,
+  { min = 1, max = 4000 } = {},
+) => {
+  if (rawValue === null || rawValue === undefined) {
+    return null
+  }
+  const parsed = Number.parseFloat(String(rawValue))
+  if (!Number.isFinite(parsed)) {
+    return null
+  }
+  const rounded = Math.round(parsed)
+  if (rounded < min || rounded > max) {
+    return null
+  }
+  return rounded
+}
+
+const extractDimensionFromStyle = (
+  styleText,
+  property,
+  limits = {},
+) => {
+  if (!styleText || !property) {
+    return null
+  }
+  const escaped = String(property).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = String(styleText).match(
+    new RegExp(`(?:^|;)\\s*${escaped}\\s*:\\s*([0-9]+(?:\\.[0-9]+)?)px`, 'i'),
+  )
+  if (!match) {
+    return null
+  }
+  return normalizeStyleDimensionPx(match[1], limits)
+}
+
 const normalizeHexColor = (value) => {
   const color = String(value || '').trim().toLowerCase()
   if (/^#[0-9a-f]{6}$/.test(color)) {
@@ -469,6 +513,7 @@ const normalizeSanitizedStyle = (
     allowColor = false,
     allowHighlight = false,
     allowCellBackground = false,
+    allowWidth = false,
     fallbackTextAlign = null,
   } = {},
 ) => {
@@ -505,6 +550,15 @@ const normalizeSanitizedStyle = (
     const background = extractHighlightFromStyle(styleText)
     if (background && !isTransparentColor(background)) {
       parts.push(`background-color: ${background};`)
+    }
+  }
+  if (allowWidth) {
+    const width = extractDimensionFromStyle(styleText, 'width', {
+      min: TABLE_COL_MIN_WIDTH,
+      max: TABLE_COL_MAX_WIDTH,
+    })
+    if (width) {
+      parts.push(`width: ${width}px;`)
     }
   }
   return parts.join(' ')
@@ -576,6 +630,7 @@ const sanitizeHtml = (rawHtml) => {
         allowFontSize: true,
         allowTextAlign: true,
         allowCellBackground: true,
+        allowWidth: true,
         fallbackTextAlign: legacyAlign,
       })
       if (style) {
@@ -705,6 +760,11 @@ const tableContextMenuStyle = computed(() => ({
   top: `${tableContextPosition.value.top}px`,
   left: `${tableContextPosition.value.left}px`,
 }))
+const tableResizeGuideStyle = computed(() => ({
+  top: `${tableResizeGuide.value.top}px`,
+  left: `${tableResizeGuide.value.left}px`,
+  height: `${tableResizeGuide.value.height}px`,
+}))
 
 let saveTimer = null
 const saveDraft = () => {
@@ -767,6 +827,8 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener('pointerdown', onDocumentPointerDown)
   document.removeEventListener('selectionchange', onSelectionChange)
+  stopTableColumnResize({ commit: false })
+  clearTableResizeHover()
   stopTableDragSelection()
 })
 
@@ -2303,6 +2365,292 @@ const getCellFromPointerEvent = (event) => {
   return getClosestTableCell(pointElement)
 }
 
+const clearTableResizeHover = () => {
+  const current = tableResizeHover.value
+  if (current?.cell instanceof HTMLElement) {
+    current.cell.classList.remove(TABLE_RESIZE_HOT_CLASS)
+  }
+  tableResizeHover.value = null
+  if (!isTableColumnResizing.value && editor.value) {
+    editor.value.style.removeProperty('cursor')
+  }
+}
+
+const getColumnEntriesFromLayout = (layout, columnIndex) => {
+  const entries = []
+  const seenCells = new Set()
+
+  for (const rowEntries of layout.rowEntries) {
+    const covering = rowEntries.find(
+      (entry) =>
+        columnIndex >= entry.startCol &&
+        columnIndex < entry.startCol + entry.colSpan,
+    )
+    if (!covering || seenCells.has(covering.cell)) {
+      continue
+    }
+    seenCells.add(covering.cell)
+    entries.push(covering)
+  }
+
+  return entries
+}
+
+const getTableColumnResizeTarget = (event) => {
+  const cell = getCellFromPointerEvent(event)
+  if (!cell) {
+    return null
+  }
+
+  const rect = cell.getBoundingClientRect()
+  const nearRightEdge =
+    rect.right - event.clientX >= 0 &&
+    rect.right - event.clientX <= TABLE_COL_RESIZE_HIT_AREA
+  if (!nearRightEdge || event.clientY < rect.top || event.clientY > rect.bottom) {
+    return null
+  }
+
+  const table = cell.closest('table')
+  const row = cell.closest('tr')
+  if (!table || !row || !editor.value?.contains(table)) {
+    return null
+  }
+
+  const layout = buildTableLayout(table)
+  const rowIndex = layout.rows.indexOf(row)
+  if (rowIndex < 0) {
+    return null
+  }
+
+  const entry = layout.rowEntries[rowIndex]?.find((item) => item.cell === cell)
+  if (!entry) {
+    return null
+  }
+
+  const columnIndex = entry.startCol + entry.colSpan - 1
+  return { table, cell, columnIndex }
+}
+
+const getCurrentColumnWidth = (table, columnIndex) => {
+  if (!(table instanceof HTMLElement)) {
+    return TABLE_COL_MIN_WIDTH
+  }
+
+  const layout = buildTableLayout(table)
+  const entries = getColumnEntriesFromLayout(layout, columnIndex)
+  if (!entries.length) {
+    return TABLE_COL_MIN_WIDTH
+  }
+
+  for (const entry of entries) {
+    if (entry.colSpan !== 1) {
+      continue
+    }
+    const inlineWidth = extractDimensionFromStyle(
+      entry.cell.getAttribute('style'),
+      'width',
+      { min: TABLE_COL_MIN_WIDTH, max: TABLE_COL_MAX_WIDTH },
+    )
+    if (inlineWidth) {
+      return inlineWidth
+    }
+  }
+
+  for (const entry of entries) {
+    if (entry.colSpan !== 1) {
+      continue
+    }
+    const rect = entry.cell.getBoundingClientRect()
+    if (rect.width > 0) {
+      return Math.round(rect.width)
+    }
+  }
+
+  for (const entry of entries) {
+    const rect = entry.cell.getBoundingClientRect()
+    if (rect.width > 0) {
+      return Math.round(rect.width / Math.max(1, entry.colSpan))
+    }
+  }
+
+  return TABLE_COL_MIN_WIDTH
+}
+
+const applyColumnWidth = (table, columnIndex, width) => {
+  if (!(table instanceof HTMLElement)) {
+    return TABLE_COL_MIN_WIDTH
+  }
+
+  const targetWidth = Math.max(
+    TABLE_COL_MIN_WIDTH,
+    Math.min(TABLE_COL_MAX_WIDTH, Math.round(width)),
+  )
+  const layout = buildTableLayout(table)
+  const entries = getColumnEntriesFromLayout(layout, columnIndex)
+  if (!entries.length) {
+    return targetWidth
+  }
+
+  const singleColumnEntries = entries.filter((entry) => entry.colSpan === 1)
+  const targets = singleColumnEntries.length ? singleColumnEntries : entries
+
+  for (const entry of targets) {
+    const finalWidth = singleColumnEntries.length
+      ? targetWidth
+      : targetWidth * Math.max(1, entry.colSpan)
+    setElementStyleProperty(entry.cell, 'width', `${Math.round(finalWidth)}px`)
+  }
+
+  return targetWidth
+}
+
+const getColumnBoundaryX = (table, columnIndex) => {
+  if (!(table instanceof HTMLElement)) {
+    return null
+  }
+
+  const layout = buildTableLayout(table)
+  const entries = getColumnEntriesFromLayout(layout, columnIndex)
+  if (!entries.length) {
+    return null
+  }
+
+  const singleEntry = entries.find((entry) => entry.colSpan === 1)
+  if (singleEntry) {
+    return singleEntry.cell.getBoundingClientRect().right
+  }
+
+  const fallback = entries[0]
+  if (!fallback) {
+    return null
+  }
+  const rect = fallback.cell.getBoundingClientRect()
+  const columnOffset = columnIndex - fallback.startCol + 1
+  const unitWidth = rect.width / Math.max(1, fallback.colSpan)
+  return rect.left + unitWidth * columnOffset
+}
+
+const startTableColumnResize = (event, target) => {
+  if (!target?.table || isTableColumnResizing.value) {
+    return
+  }
+
+  const startWidth = getCurrentColumnWidth(target.table, target.columnIndex)
+  const tableRect = target.table.getBoundingClientRect()
+  tableColumnResizeState.value = {
+    table: target.table,
+    columnIndex: target.columnIndex,
+    startX: event.clientX,
+    startWidth,
+    previousBodyCursor: document.body.style.cursor,
+    previousBodyUserSelect: document.body.style.userSelect,
+  }
+  isTableColumnResizing.value = true
+
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+  if (editor.value) {
+    editor.value.style.cursor = 'col-resize'
+  }
+
+  stopTableDragSelection()
+  clearTableResizeHover()
+  if (editingTableCell.value) {
+    exitTableCellEditMode()
+  }
+  closeMentionMenu()
+  closeTableContextMenu()
+
+  tableResizeGuide.value = {
+    visible: true,
+    top: tableRect.top,
+    left: getColumnBoundaryX(target.table, target.columnIndex) ?? event.clientX,
+    height: tableRect.height,
+  }
+
+  event.preventDefault()
+  document.addEventListener('mousemove', onTableDragMove)
+  document.addEventListener('mouseup', onTableDragEnd)
+}
+
+const moveTableColumnResize = (event) => {
+  const state = tableColumnResizeState.value
+  if (!isTableColumnResizing.value || !state?.table) {
+    return
+  }
+
+  event.preventDefault()
+  const delta = event.clientX - state.startX
+  const nextWidth = state.startWidth + delta
+  applyColumnWidth(state.table, state.columnIndex, nextWidth)
+
+  const tableRect = state.table.getBoundingClientRect()
+  tableResizeGuide.value = {
+    visible: true,
+    top: tableRect.top,
+    left: getColumnBoundaryX(state.table, state.columnIndex) ?? event.clientX,
+    height: tableRect.height,
+  }
+}
+
+const stopTableColumnResize = ({ commit = true } = {}) => {
+  const state = tableColumnResizeState.value
+  if (!state && !isTableColumnResizing.value) {
+    return
+  }
+
+  isTableColumnResizing.value = false
+  tableColumnResizeState.value = null
+  tableResizeGuide.value = { visible: false, top: 0, left: 0, height: 0 }
+
+  document.removeEventListener('mousemove', onTableDragMove)
+  document.removeEventListener('mouseup', onTableDragEnd)
+
+  if (state) {
+    document.body.style.cursor = state.previousBodyCursor || ''
+    document.body.style.userSelect = state.previousBodyUserSelect || ''
+  } else {
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }
+  if (editor.value) {
+    editor.value.style.removeProperty('cursor')
+  }
+
+  if (commit) {
+    syncModelFromEditor()
+  }
+}
+
+const onEditorMouseMove = (event) => {
+  if (isTableColumnResizing.value || isTableDragging.value || editingTableCell.value) {
+    return
+  }
+
+  const target = getTableColumnResizeTarget(event)
+  if (!target) {
+    clearTableResizeHover()
+    return
+  }
+
+  const previousCell = tableResizeHover.value?.cell
+  if (previousCell && previousCell !== target.cell) {
+    previousCell.classList.remove(TABLE_RESIZE_HOT_CLASS)
+  }
+  target.cell.classList.add(TABLE_RESIZE_HOT_CLASS)
+  tableResizeHover.value = target
+  if (editor.value) {
+    editor.value.style.cursor = 'col-resize'
+  }
+}
+
+const onEditorMouseLeave = () => {
+  if (isTableColumnResizing.value) {
+    return
+  }
+  clearTableResizeHover()
+}
+
 const stopTableDragSelection = () => {
   if (!isTableDragging.value) {
     return
@@ -2524,6 +2872,13 @@ const addCurrentTableRow = (contextOverride = null) => {
     const tag = !isHeaderRow && cell.tagName === 'TH' ? 'th' : 'td'
     const newCell = document.createElement(tag)
     newCell.textContent = tag === 'th' ? 'Header' : 'Cell'
+    const width = extractDimensionFromStyle(cell.getAttribute('style'), 'width', {
+      min: TABLE_COL_MIN_WIDTH,
+      max: TABLE_COL_MAX_WIDTH,
+    })
+    if (width) {
+      setElementStyleProperty(newCell, 'width', `${width}px`)
+    }
     newRow.appendChild(newCell)
   }
 
@@ -2570,6 +2925,13 @@ const addCurrentTableColumn = (contextOverride = null) => {
     const newTag = baseCell?.tagName === 'TH' ? 'th' : 'td'
     const newCell = document.createElement(newTag)
     newCell.textContent = newTag === 'th' ? 'Header' : 'Cell'
+    const width = extractDimensionFromStyle(baseCell?.getAttribute('style'), 'width', {
+      min: TABLE_COL_MIN_WIDTH,
+      max: TABLE_COL_MAX_WIDTH,
+    })
+    if (width) {
+      setElementStyleProperty(newCell, 'width', `${width}px`)
+    }
 
     if (targetIndex >= currentCells.length) {
       currentRow.appendChild(newCell)
@@ -2922,6 +3284,11 @@ const onEditorCaretChange = () => {
 }
 
 const onTableDragMove = (event) => {
+  if (isTableColumnResizing.value) {
+    moveTableColumnResize(event)
+    return
+  }
+
   if (!isTableDragging.value || !tableRangeAnchor.value) {
     return
   }
@@ -2943,6 +3310,11 @@ const onTableDragMove = (event) => {
 }
 
 const onTableDragEnd = () => {
+  if (isTableColumnResizing.value) {
+    stopTableColumnResize()
+    updateActiveTools()
+    return
+  }
   stopTableDragSelection()
   updateActiveTools()
 }
@@ -2951,6 +3323,16 @@ const onEditorMouseDown = (event) => {
   if (event.button !== 0) {
     return
   }
+
+  if (!editingTableCell.value) {
+    const resizeTarget = getTableColumnResizeTarget(event)
+    if (resizeTarget) {
+      startTableColumnResize(event, resizeTarget)
+      updateActiveTools()
+      return
+    }
+  }
+  clearTableResizeHover()
 
   const image = getClosestEditorImage(event.target)
   if (image) {
@@ -3397,9 +3779,11 @@ const handleAction = (action, contextOverride = null) => {
       closeLinkPopover()
       closeMentionMenu()
       closeTableContextMenu()
+      stopTableColumnResize({ commit: false })
       stopTableDragSelection()
       exitTableCellEditMode()
       clearSelectedTableCells()
+      clearTableResizeHover()
       clearSelectedImage()
       closeImagePanel()
       resetImageForm()
@@ -3505,8 +3889,10 @@ const handleAction = (action, contextOverride = null) => {
       <!-- <header class="pane-header">Rich Text Draft</header> -->
       <div ref="editor" class="editor-input" contenteditable="true" role="textbox" aria-multiline="true"
         data-placeholder="Start writing your content..." @mousedown="onEditorMouseDown" @dblclick="onEditorDblClick"
-        @input="onEditorInput" @keyup="onEditorCaretChange" @mouseup="onEditorCaretChange" @keydown="onEditorKeydown"
-        @contextmenu="onEditorContextMenu"></div>
+        @input="onEditorInput" @keyup="onEditorCaretChange" @mouseup="onEditorCaretChange" @mousemove="onEditorMouseMove"
+        @mouseleave="onEditorMouseLeave" @keydown="onEditorKeydown" @contextmenu="onEditorContextMenu"></div>
+
+      <div v-if="tableResizeGuide.visible" class="table-resize-guide" :style="tableResizeGuideStyle" aria-hidden="true"></div>
 
       <ul v-if="showMentionMenu" class="mention-menu" :style="mentionMenuStyle" role="listbox"
         aria-label="Variable mentions">
@@ -3718,6 +4104,11 @@ const handleAction = (action, contextOverride = null) => {
   cursor: cell;
 }
 
+.editor-input :deep(.table-col-resize-hot) {
+  border-right-color: #38bdf8;
+  box-shadow: inset -1px 0 0 #38bdf8;
+}
+
 .editor-input :deep(th) {
   background: #f3f7fb;
   font-weight: 600;
@@ -3733,6 +4124,16 @@ const handleAction = (action, contextOverride = null) => {
   cursor: text;
   background: #ffffff;
   box-shadow: inset 0 0 0 2px #0f766e;
+}
+
+.table-resize-guide {
+  position: fixed;
+  z-index: 42;
+  width: 2px;
+  border-radius: 999px;
+  background: #0ea5e9;
+  box-shadow: 0 0 0 1px rgba(14, 165, 233, 0.24);
+  pointer-events: none;
 }
 
 .image-file-input {
